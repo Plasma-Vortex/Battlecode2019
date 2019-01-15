@@ -527,6 +527,16 @@ class MyRobot extends BCAbstractRobot {
         return;
     }
 
+    // for castles only
+    underAttack(visible) {
+        for (let i = 0; i<visible; i++){
+            let r = visible[i];
+            if (r.team !== this.me.team) {
+                this.me.team()
+            }
+        }
+    }
+
     turn() {
         this.log("START TURN " + this.me.turn);
         this.alreadySignaled = false;
@@ -825,11 +835,15 @@ class MyRobot extends BCAbstractRobot {
 
             let karbGoal = this.karbGoalStatus(this.desiredKarbPilgrims);
             let fuelGoal = this.fuelGoalStatus(this.desiredFuelPilgrims);
+            let attackStatus = this.underAttack(visible);
             this.log("Karb goal: " + JSON.stringify(karbGoal));
             this.log("Fuel goal: " + JSON.stringify(fuelGoal));
 
             if (this.hasSpaceAround()) {
                 // add defending against attacks as top priority
+                if (attackStatus.attacked) {
+
+                }
                 if (!karbGoal.reached) {
                     if (karbGoal.canHelp && this.canMaintainBuffer(SPECS.PILGRIM)) {
                         return this.buildKarbPilgrim();
@@ -861,10 +875,13 @@ class MyRobot extends BCAbstractRobot {
                     this.lastCreated = null;
                 }
             }
-            this.log("Current number of karb pilgrims: " + this.karbPilgrims.length);
-            this.log("Current number of fuel pilgrims: " + this.fuelPilgrims.length);
+            // this.log("Current number of karb pilgrims: " + this.karbPilgrims.length);
+            // this.log("Current number of fuel pilgrims: " + this.fuelPilgrims.length);
 
             this.sendSignal();
+        }
+        else if (this.me.unit === SPECS.PREACHER) {
+            
         }
         else { // other attacking unit
             this.loc = { x: this.me.x, y: this.me.y };
