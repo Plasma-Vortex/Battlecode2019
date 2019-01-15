@@ -32,6 +32,7 @@ export function empty(loc, map, robots = null) {
     return map[loc.y][loc.x] && (robots === null || robots[loc.y][loc.x] <= 0);
 }
 
+// TODO: when stuck, perform full bfs treating robot positions as fixed
 export function bfs(start, map) {
     let q = new Queue();
     let visited = new Array(map.length);

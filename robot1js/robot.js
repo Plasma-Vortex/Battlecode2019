@@ -72,8 +72,8 @@ class MyRobot extends BCAbstractRobot {
         this.castleBFS = [];
         this.enemyCastleBFS = [];
         for (let i = 0; i < this.castles.length; i++) {
-            this.castleBFS.push(bfs(this.castles[i], this.map));
-            this.enemyCastleBFS.push(bfs(this.enemyCastles[i], this.map));
+            this.castleBFS.push(bfs(this.castlePos[i], this.map));
+            this.enemyCastleBFS.push(bfs(this.enemyCastlePos[i], this.map));
         }
         for (let x = 0; x < this.map.length; x++) {
             for (let y = 0; y < this.map.length; y++) {
@@ -87,7 +87,7 @@ class MyRobot extends BCAbstractRobot {
                 }
                 let enemyMinDist = 1000000;
                 let enemyBestCastle = -1;
-                for (let i = 0; i < this.enemyCastles.length; i++) {
+                for (let i = 0; i < this.enemyCastlePos.length; i++) {
                     if (this.enemyCastleBFS[i][y][x] < enemyMinDist) {
                         enemyBestCastle = i;
                         enemyMinDist = this.enemyCastleBFS[i][y][x];
@@ -131,8 +131,8 @@ class MyRobot extends BCAbstractRobot {
                     continue;
                 hash = 1 << 15;
                 hash |= hashShift(shift) << 12;
-                hash |= this.castles[i].x << 6;
-                hash |= this.castles[i].y;
+                hash |= this.castlePos[i].x << 6;
+                hash |= this.castlePos[i].y;
                 this.signalQueue.enqueue({ signal: hash, dist: norm(shift) });
             }
         }
@@ -152,6 +152,7 @@ class MyRobot extends BCAbstractRobot {
     }
 
     // consider sorting by sqDist if bfsDist is equal, to reduce travel cost
+    // need to update all targetKarb for new structure
     initResourceList() {
         this.targetKarb = [];
         this.targetFuel = [];
@@ -190,22 +191,30 @@ class MyRobot extends BCAbstractRobot {
         }
     }
 
-    needKarbPilgrims(karbPilgrimsNeeded) {
-        for (let i = 0; i < Math.min(this.targetKarb.length, karbPilgrimsNeeded); i++) {
+    karbGoalStatus(goal) {
+        let goalReached = true;
+        let canHelp = false;
+        for (let i = 0; i < Math.min(this.targetKarb.length, goal); i++) {
             if (this.targetKarb[i].assignedWorker === -1) {
-                return true;
+                goalReached = false;
+                if (this.targetKarb[i].assignedCastle === this.castleNumber)
+                    canHelp = true;
             }
         }
-        return false;
+        return { reached: goalReached, canHelp: canHelp };
     }
 
-    needFuelPilgrims(fuelPilgrimsNeeded) {
-        for (let i = 0; i < Math.min(this.targetFuel.length, fuelPilgrimsNeeded); i++) {
+    fuelGoalStatus(goal) {
+        let goalReached = true;
+        let canHelp = false;
+        for (let i = 0; i < Math.min(this.targetFuel.length, goal); i++) {
             if (this.targetFuel[i].assignedWorker === -1) {
-                return true;
+                goalReached = false;
+                if (this.targetFuel[i].assignedCastle === this.castleNumber)
+                    canHelp = true;
             }
         }
-        return false;
+        return { reached: goalReached, canHelp: canHelp };
     }
 
     canMaintainBuffer(unitType) {
@@ -213,22 +222,38 @@ class MyRobot extends BCAbstractRobot {
             && this.fuel - SPECS.UNITS[unitType].CONSTRUCTION_FUEL >= this.fuelBuffer);
     }
 
-    addNewestToUnitList(visible) {
+    // for castles only
+    // for addNewUnits
+    knownID(id) {
+        return (this.castles.includes(id) || this.churches.includes(id)
+            || this.karbPilgrims.includes(id) || this.fuelPilgrims.includes(id)
+            || this.crusaders.includes(id) || this.prophets.includes(id) || this.preachers.includes(id));
+    }
+
+    // for castles only
+    addNewUnits(visible) {
         for (let i = 0; i < visible.length; i++) {
             let r = visible[i];
             if (r.team === this.me.team && (r.castle_talk >> 7)) {
+                if (this.knownID(r.id))
+                    continue;
                 // newly created robot
+                this.log("Notified of a new robot!");
                 let message = r.castle_talk;
                 let unitType = ((message >> 5) & ((1 << 2) - 1)) + 2;
                 if (unitType === SPECS.PILGRIM) {
                     if ((message >> 4) & 1) { // fuel pilgrim
+                        this.log("It's a fuel pilgrim with id " + r.id);
                         this.fuelPilgrims.push(r.id);
                         let fuelID = message & ((1 << 4) - 1);
+                        this.log("It targets fuel #" + fuelID);
                         this.targetFuel[fuelID].assignedWorker = r.id;
                     }
                     else {
+                        this.log("It's a karb pilgrim with id " + r.id);
                         this.karbPilgrims.push(r.id);
                         let karbID = message & ((1 << 4) - 1);
+                        this.log("It targets karb #" + karbID);
                         this.targetKarb[karbID].assignedWorker = r.id;
                     }
                 }
@@ -258,32 +283,70 @@ class MyRobot extends BCAbstractRobot {
         });
     }
 
-    // TODO: finish adding pilgrim death check
-    // add assignWorker = -1 when pilgrim dies
     updateAllUnitLists(visible) {
         // check deaths
-        for (let i = 0; i < this.targetKarb.length; i++){
-
+        let updatedKarbPilgrims = [];
+        for (let i = 0; i < this.targetKarb.length; i++) {
+            let id = this.targetKarb[i].assignedWorker;
+            if (id > 0) {
+                let stillAlive = false;
+                for (let j = 0; j < visible.length; j++) {
+                    if (id === visible[j].id) {
+                        stillAlive = true;
+                    }
+                }
+                if (stillAlive){
+                    updatedKarbPilgrims.push(id);
+                }
+                else{
+                    this.targetKarb[i].assignedWorker = -1;
+                }
+            }
         }
+        this.karbPilgrims = updatedKarbPilgrims;
+
+        let updatedFuelPilgrims = [];
+        for (let i = 0; i < this.targetFuel.length; i++) {
+            let id = this.targetFuel[i].assignedWorker;
+            if (id > 0) {
+                let stillAlive = false;
+                for (let j = 0; j < visible.length; j++) {
+                    if (id === visible[j].id) {
+                        stillAlive = true;
+                    }
+                }
+                if (stillAlive){
+                    updatedFuelPilgrims.push(id);
+                }
+                else{
+                    this.targetFuel[i].assignedWorker = -1;
+                }
+            }
+        }
+        this.FuelPilgrims = updatedFuelPilgrims;
+
         this.updateUnitList(this.churches, visible);
         this.updateUnitList(this.crusaders, visible);
         this.updateUnitList(this.prophets, visible);
         this.updateUnitList(this.preachers, visible);
 
-        // check new births
-        if (this.lastCreated !== null) {
-            this.addNewestToUnitList(visible);
-        }
+        // check new units
+        this.addNewUnits(visible);
 
         // add new way of finding newly build churches via pilgrim castleTalk
     }
 
+    // TODO: if new unit gets killed when assignedWorker = 0, need to replace 
     buildKarbPilgrim() {
         // is min necessary when desired is always at most targetKarb.length?
         for (let i = 0; i < Math.min(this.targetKarb.length, this.desiredKarbPilgrims); i++) {
-            if (this.targetKarb[i].assignedWorker === -1) {
+            if (this.targetKarb[i].assignedCastle === this.castleNumber
+                && this.targetKarb[i].assignedWorker === -1) {
                 // found first needed karb pilgrim
-                let destination = { // make clone instead of reference
+                this.targetKarb[i].assignedWorker = 0; // 0 means pilgrim exists but id unknown
+
+                // make clone instead of reference
+                let destination = {
                     x: this.targetKarb[i].pos.x,
                     y: this.targetKarb[i].pos.y
                 };
@@ -316,12 +379,17 @@ class MyRobot extends BCAbstractRobot {
         this.log("ERROR! Tried to build karb pilgrim when desired number is already reached")
     }
 
+    // TODO: if new unit gets killed when assignedWorker = 0, need to replace 
     buildFuelPilgrim() {
         // is min necessary when desired is always at most targetFuel.length?
         for (let i = 0; i < Math.min(this.targetFuel.length, this.desiredFuelPilgrims); i++) {
-            if (this.targetFuel[i].assignedWorker === -1) {
+            if (this.targetFuel[i].assignedCastle === this.castleNumber
+                && this.targetFuel[i].assignedWorker === -1) {
                 // found first needed fuel pilgrim
-                let destination = { // make clone instead of reference
+                this.targetFuel[i].assignedWorker = 0; // 0 means pilgrim exists but id unknown
+
+                // make clone instead of reference
+                let destination = {
                     x: this.targetFuel[i].pos.x,
                     y: this.targetFuel[i].pos.y
                 };
@@ -364,26 +432,28 @@ class MyRobot extends BCAbstractRobot {
     }
 
     pilgrimInit() {
+        this.log("Initializing pilgrim");
         this.findSymmetry();
-        this.enemyCastles = [];
+        this.enemyCastlePos = [];
         for (let i = 0; i < this.castles.length; i++) {
-            this.enemyCastles.push(this.reflect(this.castles[i]));
+            this.enemyCastlePos.push(this.reflect(this.castlePos[i]));
         }
         this.assignedArea = this.assignAreaToCastles();
         this.initResourceList();
         if (this.targetResource === "karb") {
             this.targetMine = {
-                x: this.targetKarb[this.targetID][2],
-                y: this.targetKarb[this.targetID][3]
+                x: this.targetKarb[this.targetID].pos.x,
+                y: this.targetKarb[this.targetID].pos.y
             };
         }
         else {
             this.targetMine = {
-                x: this.targetFuel[this.targetID][2],
-                y: this.targetFuel[this.targetID][3]
+                x: this.targetFuel[this.targetID].pos.x,
+                y: this.targetFuel[this.targetID].pos.y
             };
         }
         this.bfsFromBase = bfs(this.base, this.map);
+        this.log(pairToString(this.targetMine));
         this.bfsFromMine = bfs(this.targetMine, this.map);
         this.log("I am a pilgrim that just got initialized");
         this.log("Target Resource: " + this.targetResource);
@@ -392,6 +462,8 @@ class MyRobot extends BCAbstractRobot {
     }
 
     hasUnit(x, y, unitType) {
+        if (x < 0 || y < 0 || x >= this.map.length || y >= this.map.length)
+            return false;
         if (this.getVisibleRobotMap()[y][x] > 0) {
             let r = this.getRobot(this.getVisibleRobotMap()[y][x]);
             if (r.team === this.me.team && r.unit === unitType)
@@ -489,10 +561,13 @@ class MyRobot extends BCAbstractRobot {
                                     this.receivedFirstMessage = true;
 
                                     this.castles = new Array((hash >> 10) & ((1 << 2) - 1));
-                                    this.castles[((hash >> 8) & ((1 << 2) - 1)) - 1] = { x: r.x, y: r.y };
+                                    this.castlePos = new Array(this.castles.length);
+                                    this.baseCastleNumber = ((hash >> 8) & ((1 << 2) - 1)) - 1;
+                                    this.castles[this.baseCastleNumber] = r.id;
+                                    this.castlePos[this.baseCastleNumber] = { x: r.x, y: r.y };
 
                                     this.log("Known castle locations:");
-                                    this.log(JSON.stringify(this.castles));
+                                    this.log(this.castlePos);
 
                                     this.base = { x: r.x, y: r.y };
                                     this.churches = new Array((hash >> 6) & ((1 << 2) - 1));
@@ -518,12 +593,13 @@ class MyRobot extends BCAbstractRobot {
                                 else {
                                     for (let j = 0; j < this.castles.length; j++) {
                                         if (this.castles[j] === undefined) {
-                                            this.castles[j] = { x: (r.signal >> 6) & ((1 << 6) - 1), y: r.signal & ((1 << 6) - 1) };
+                                            this.castles[j] = r.id;
+                                            this.castlePos[j] = { x: (r.signal >> 6) & ((1 << 6) - 1), y: r.signal & ((1 << 6) - 1) };
                                             break;
                                         }
                                     }
                                     this.log("Known castle locations:");
-                                    this.log(JSON.stringify(this.castles));
+                                    this.log(this.castlePos);
 
                                     for (let j = 0; j < this.castles.length; j++) {
                                         if (this.castles[j] === undefined) {
@@ -641,11 +717,13 @@ class MyRobot extends BCAbstractRobot {
 
             if (this.me.turn === 1) {
                 this.castles = [];
+                this.castlePos = [];
                 this.churches = [];
                 for (let i = 0; i < visible.length; i++) {
                     let r = visible[i];
                     if (r.team === this.me.team) { // cannot check r.unit === SPECS.CASTLE because r.unit is undefined when r is not visible
-                        this.castles.push({ x: -1, y: -1 });
+                        this.castles.push(-1);
+                        this.castlePos.push({ x: -1, y: -1 });
                     }
                 }
                 this.castleNumber = 0;
@@ -654,12 +732,14 @@ class MyRobot extends BCAbstractRobot {
                     if (r.team === this.me.team && r.id !== this.me.id) {
                         if ((r.castle_talk >> 6) !== 0) {
                             let rCastleNumber = (r.castle_talk >> 6) - 1;
-                            this.castles[rCastleNumber].x = r.castle_talk & ((1 << 6) - 1);
+                            this.castles[rCastleNumber] = r.id;
+                            this.castlePos[rCastleNumber].x = r.castle_talk & ((1 << 6) - 1);
                             this.castleNumber++;
                         }
                     }
                 }
-                this.castles[this.castleNumber] = { x: this.me.x, y: this.me.y };
+                this.castles[this.castleNumber] = this.me.id;
+                this.castlePos[this.castleNumber] = { x: this.me.x, y: this.me.y };
                 this.castleTalk(((this.castleNumber + 1) << 6) + this.me.x);
 
                 // other init things
@@ -674,10 +754,11 @@ class MyRobot extends BCAbstractRobot {
                         if ((r.castle_talk >> 6) !== 0) {
                             let rCastleNumber = (r.castle_talk >> 6) - 1;
                             if (rCastleNumber < this.castleNumber) { // r's second signal is y coordinate
-                                this.castles[rCastleNumber].y = r.castle_talk & ((1 << 6) - 1);
+                                this.castlePos[rCastleNumber].y = r.castle_talk & ((1 << 6) - 1);
                             }
                             else { // r's first signal is x coordinate
-                                this.castles[rCastleNumber].x = r.castle_talk & ((1 << 6) - 1);
+                                this.castles[rCastleNumber] = r.id;
+                                this.castlePos[rCastleNumber].x = r.castle_talk & ((1 << 6) - 1);
                             }
                         }
                     }
@@ -693,20 +774,23 @@ class MyRobot extends BCAbstractRobot {
                             let rCastleNumber = (r.castle_talk >> 6) - 1;
                             if (rCastleNumber > this.castleNumber) { // r's second signal is y coordinate
                                 // this.log("Castle " + rCastleNumber + " sent castleTalk message " + r.castle_talk & ((1 << 6) - 1));
-                                this.castles[rCastleNumber].y = r.castle_talk & ((1 << 6) - 1);
+                                this.castlePos[rCastleNumber].y = r.castle_talk & ((1 << 6) - 1);
                             }
                         }
                     }
                 }
 
                 this.log("I am castle number " + this.castleNumber);
-                this.log("Found castle positions");
-                this.log(this.castles);
+                // this.log("Castles IDs:");
+                // this.log(this.castles);
+                // this.log("is ID 438 new? " + this.isNewID(438));
+                // this.log("Found castle positions");
+                // this.log(this.castlePos);
 
                 this.findSymmetry();
-                this.enemyCastles = [];
+                this.enemyCastlePos = [];
                 for (let i = 0; i < this.castles.length; i++) {
-                    this.enemyCastles.push(this.reflect(this.castles[i]));
+                    this.enemyCastlePos.push(this.reflect(this.castlePos[i]));
                 }
 
                 this.maxKarbPilgrims = 16;
@@ -717,11 +801,11 @@ class MyRobot extends BCAbstractRobot {
 
                 // this.log("Target karb:");
                 // for (let i = 0; i<this.targetKarb.length; i++){
-                //     this.log(this.targetKarb[i]);
+                //     this.log(JSON.stringify(this.targetKarb[i]));
                 // }
                 // this.log("Target fuel:");
                 // for (let i = 0; i<this.targetFuel.length; i++){
-                //     this.log(this.targetFuel[i]);
+                //     this.log(JSON.stringify(this.targetFuel[i]));
                 // }
 
                 this.churches = [];
@@ -739,21 +823,34 @@ class MyRobot extends BCAbstractRobot {
 
             this.updateAllUnitLists(visible);
 
+            let karbGoal = this.karbGoalStatus(this.desiredKarbPilgrims);
+            let fuelGoal = this.fuelGoalStatus(this.desiredFuelPilgrims);
+            this.log("Karb goal: " + JSON.stringify(karbGoal));
+            this.log("Fuel goal: " + JSON.stringify(fuelGoal));
+
             if (this.hasSpaceAround()) {
                 // add defending against attacks as top priority
-                if (this.needKarbPilgrims(this.desiredKarbPilgrims)) {
-                    if (!this.canMaintainBuffer(SPECS.PILGRIM)) {
-                        this.sendSignal();
-                        return; // save up resources instead of risking safety buffer
+                if (!karbGoal.reached) {
+                    if (karbGoal.canHelp && this.canMaintainBuffer(SPECS.PILGRIM)) {
+                        return this.buildKarbPilgrim();
                     }
-                    return this.buildKarbPilgrim();
+                    else {
+                        // wait for other castle to do it, if !canHelp
+                        // or if it's my job, prioritize safety buffer
+                        this.sendSignal();
+                        return;
+                    }
                 }
-                else if (this.needFuelPilgrims(this.desiredFuelPilgrims)) {
-                    if (!this.canMaintainBuffer(SPECS.PILGRIM)) {
-                        this.sendSignal();
-                        return; // save up resources instead of risking safety buffer
+                else if (!fuelGoal.reached) {
+                    if (fuelGoal.canHelp && this.canMaintainBuffer(SPECS.PILGRIM)) {
+                        return this.buildFuelPilgrim();
                     }
-                    return this.buildFuelPilgrim();
+                    else {
+                        // wait for other castle to do it, if !canHelp
+                        // or if it's my job, prioritize safety buffer
+                        this.sendSignal();
+                        return;
+                    }
                 }
                 // else if (this.canMaintainBuffer(SPECS.CRUSADER)) {
                 //     this.log("Building crusader");
@@ -764,6 +861,9 @@ class MyRobot extends BCAbstractRobot {
                     this.lastCreated = null;
                 }
             }
+            this.log("Current number of karb pilgrims: " + this.karbPilgrims.length);
+            this.log("Current number of fuel pilgrims: " + this.fuelPilgrims.length);
+
             this.sendSignal();
         }
         else { // other attacking unit
