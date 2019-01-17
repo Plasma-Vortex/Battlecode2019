@@ -1,9 +1,11 @@
 import { BCAbstractRobot, SPECS } from 'battlecode';
 // import {reflect, getDir, rotate, toCoordinateDir, toCompassDir, goto, sqDist} from 'nav';
 
-import { addPair, subtractPair, pairEq, pairToString, sqDist, hashShift, unhashShift, norm, empty, bfs, move, findClosestKarbonite, findClosestFuel, findClosestPosition, customSort } from './nav.js';
+import { addPair, subtractPair, pairEq, inGrid, pairToString, sqDist, hashShift, unhashShift, norm, empty, bfs, fullBFS, move, findClosestKarbonite, findClosestFuel, findClosestPosition, customSort, compareDist, copyPair, } from './nav.js';
 import { Queue } from './Queue.src.js';
 
+// 3 castle test seed: 1505486586
+// pilgrim goes to enemy mine seed: 2045874012
 
 class MyRobot extends BCAbstractRobot {
     canBuild(unitType) {
@@ -21,15 +23,15 @@ class MyRobot extends BCAbstractRobot {
         return false;
     }
 
-    buildAround(unitType) {
-        for (let dx = -1; dx <= 1; dx++) {
-            for (let dy = -1; dy <= 1; dy++) {
-                if (empty({ x: this.loc.x + dx, y: this.loc.y + dy }, this.map, this.getVisibleRobotMap())) {
-                    return this.buildUnit(unitType, dx, dy);
-                }
-            }
-        }
-    }
+    // buildAround(unitType) {
+    //     for (let dx = -1; dx <= 1; dx++) {
+    //         for (let dy = -1; dy <= 1; dy++) {
+    //             if (empty({ x: this.loc.x + dx, y: this.loc.y + dy }, this.map, this.getVisibleRobotMap())) {
+    //                 return this.buildUnit(unitType, dx, dy);
+    //             }
+    //         }
+    //     }
+    // }
 
     findSymmetry() {
         for (let x = 0; x < this.map.length; x++) {
@@ -58,10 +60,10 @@ class MyRobot extends BCAbstractRobot {
 
     reflect(pt) {
         if (this.symmetry === "x" || this.symmetry === "xy") {
-            return { x: pt.x, y: this.map.length - pt.y - 1 };
+            return { x: this.map.length - pt.x - 1, y: pt.y };
         }
         else {
-            return { x: this.map.length - pt.x - 1, y: pt.y };
+            return { x: pt.x, y: this.map.length - pt.y - 1 };
         }
     }
 
@@ -108,7 +110,7 @@ class MyRobot extends BCAbstractRobot {
     }
 
     // information taken from lastCreated
-    queueInitSignal() {
+    queueInitSignal(priority = false) {
         if (this.lastCreated === null) {
             return;
         }
@@ -124,7 +126,12 @@ class MyRobot extends BCAbstractRobot {
                 hash |= 1 << 4;
             }
             hash |= this.lastCreated[3];
-            this.signalQueue.enqueue({ signal: hash, dist: norm(shift) });
+            if (priority) {
+                this.prioritySignalQueue.enqueue({ signal: hash, dist: norm(shift) });
+            }
+            else {
+                this.signalQueue.enqueue({ signal: hash, dist: norm(shift) });
+            }
 
             for (let i = 0; i < this.castles.length; i++) {
                 if (i === this.castleNumber)
@@ -133,19 +140,55 @@ class MyRobot extends BCAbstractRobot {
                 hash |= hashShift(shift) << 12;
                 hash |= this.castlePos[i].x << 6;
                 hash |= this.castlePos[i].y;
-                this.signalQueue.enqueue({ signal: hash, dist: norm(shift) });
+                if (priority)
+                    this.prioritySignalQueue.enqueue({ signal: hash, dist: norm(shift) });
+                else
+                    this.signalQueue.enqueue({ signal: hash, dist: norm(shift) });
             }
+        }
+        else if (this.lastCreated[0] === SPECS.PREACHER) {
+            this.log("Queueing mage init signal");
+            let hash = 1 << 15; // meant for newest robot
+            let shift = this.lastCreated[1];
+            this.log("Shift: " + pairToString(shift));
+            this.log("Distance: " + norm(shift));
+            hash |= hashShift(shift) << 12; // bits 12-14 specify position relative to castle
+            if (this.lastCreated[2] === "defense") {
+                hash |= 1 << 11; // bit 11 specifies whether mage should defend or attack
+            }
+            hash |= Number(this.lastCreated[3]) << 10; // bit 10 says whether mage should go fast or not
+            hash |= (this.lastCreated[4].x + 16) << 5; // specify shifted relative x-coord of enemy
+            hash |= this.lastCreated[4].y + 16; // specify shifted relative y-coord of enemy
+            if (priority)
+                this.prioritySignalQueue.enqueue({ signal: hash, dist: norm(shift) });
+            else
+                this.signalQueue.enqueue({ signal: hash, dist: norm(shift) });
         }
     }
 
     sendSignal() {
-        if (this.signalQueue.isEmpty())
-            return;
         if (this.alreadySignaled) {
             this.log("ERROR! Tried to signal twice in the same turn");
             return;
         }
-        let message = this.signalQueue.dequeue();
+        if (this.prioritySignalQueue.isEmpty() && this.signalQueue.isEmpty())
+            return;
+
+        let message = 0; // will be overwritten
+        if (!this.prioritySignalQueue.isEmpty()) {
+            if (this.fuel < this.prioritySignalQueue.peek().dist) {
+                this.log("Not enough fuel to send message of distance " + this.prioritySignalQueue.peek().dist);
+                return; // must save up fuel
+            }
+            message = this.prioritySignalQueue.dequeue();
+        }
+        else {
+            if (this.fuel < this.signalQueue.peek().dist) {
+                this.log("Not enough fuel to send message of distance " + this.signalQueue.peek().dist);
+                return; // must save up fuel
+            }
+            message = this.signalQueue.dequeue();
+        }
         this.log("Sending signal " + message.signal);
         this.signal(message.signal, message.dist);
         this.alreadySignaled = true;
@@ -154,12 +197,15 @@ class MyRobot extends BCAbstractRobot {
     // consider sorting by sqDist if bfsDist is equal, to reduce travel cost
     // need to update all targetKarb for new structure
     initResourceList() {
+        this.log("Init Resource List");
         this.targetKarb = [];
         this.targetFuel = [];
         for (let x = 0; x < this.map.length; x++) {
             for (let y = 0; y < this.map.length; y++) {
                 if (this.karbonite_map[y][x]) {
+                    // this.log(pairToString({x:x, y:y})+" has karb!");
                     if (this.assignedArea[y][x].team === this.me.team) {
+                        // this.log(pairToString({x:x, y:y})+" is assinged to my team");
                         this.targetKarb.push({
                             dist: this.assignedArea[y][x].dist,
                             assignedCastle: this.assignedArea[y][x].castle,
@@ -295,10 +341,10 @@ class MyRobot extends BCAbstractRobot {
                         stillAlive = true;
                     }
                 }
-                if (stillAlive){
+                if (stillAlive) {
                     updatedKarbPilgrims.push(id);
                 }
-                else{
+                else {
                     this.targetKarb[i].assignedWorker = -1;
                 }
             }
@@ -315,10 +361,10 @@ class MyRobot extends BCAbstractRobot {
                         stillAlive = true;
                     }
                 }
-                if (stillAlive){
+                if (stillAlive) {
                     updatedFuelPilgrims.push(id);
                 }
-                else{
+                else {
                     this.targetFuel[i].assignedWorker = -1;
                 }
             }
@@ -346,34 +392,31 @@ class MyRobot extends BCAbstractRobot {
                 this.targetKarb[i].assignedWorker = 0; // 0 means pilgrim exists but id unknown
 
                 // make clone instead of reference
-                let destination = {
-                    x: this.targetKarb[i].pos.x,
-                    y: this.targetKarb[i].pos.y
-                };
+                let destination = copyPair(this.targetKarb[i].pos);
 
                 // choose best starting placement around castle
                 let minDist = 1000000;
-                let bestPos = { x: -1, y: -1 };
+                let bestShift = { x: -100, y: -100 };
                 for (let dx = -1; dx <= 1; dx++) {
                     for (let dy = -1; dy <= 1; dy++) {
-                        let pos = { x: this.loc.x + dx, y: this.loc.y + dy };
+                        let shift = { x: dx, y: dy };
+                        let pos = addPair(this.loc, shift);
                         if (empty(pos, this.map, this.getVisibleRobotMap())) {
                             if (sqDist(pos, destination) < minDist) {
                                 minDist = sqDist(pos, destination);
-                                bestPos = pos;
+                                bestShift = shift;
                             }
                         }
                     }
                 }
 
-                this.log("Buliding Karb Pilgrim at " + pairToString(bestPos)
+                this.log("Buliding Karb Pilgrim at " + pairToString(addPair(this.loc, bestShift))
                     + " to target karb #" + i + " at " + pairToString(destination));
 
-                let shift = subtractPair(bestPos, this.loc);
-                this.lastCreated = [SPECS.PILGRIM, shift, "karb", i];
+                this.lastCreated = [SPECS.PILGRIM, bestShift, "karb", i];
                 this.queueInitSignal();
                 this.sendSignal();
-                return this.buildUnit(SPECS.PILGRIM, shift.x, shift.y);
+                return this.buildUnit(SPECS.PILGRIM, bestShift.x, bestShift.y);
             }
         }
         this.log("ERROR! Tried to build karb pilgrim when desired number is already reached")
@@ -389,10 +432,7 @@ class MyRobot extends BCAbstractRobot {
                 this.targetFuel[i].assignedWorker = 0; // 0 means pilgrim exists but id unknown
 
                 // make clone instead of reference
-                let destination = {
-                    x: this.targetFuel[i].pos.x,
-                    y: this.targetFuel[i].pos.y
-                };
+                let destination = copyPair(this.targetFuel[i].pos);
 
                 // choose best starting placement around castle
                 let minDist = 1000000;
@@ -431,6 +471,43 @@ class MyRobot extends BCAbstractRobot {
         return this.fuel >= norm(chosenMove) * SPECS.UNITS[this.me.unit].FUEL_PER_MOVE;
     }
 
+    buildDefenseMage(enemy) { // enemy.relPos is relative position to castle
+        this.log("Building defense mage to protect against enemy at "
+            + pairToString(addPair(this.loc, enemy.relPos)));
+        let minDist = 1000000;
+        let bestShift = { x: -100, y: -100 };
+        for (let dx = -1; dx <= 1; dx++) {
+            for (let dy = -1; dy <= 1; dy++) {
+                let shift = { x: dx, y: dy };
+                let pos = addPair(this.loc, shift);
+                this.log("Considering position " + pairToString(pos));
+                if (empty(pos, this.map, this.getVisibleRobotMap())) {
+                    this.log("Not empty");
+                    if (sqDist(shift, enemy.relPos) < minDist) {
+                        this.log("Closest distance so far");
+                        bestShift = shift;
+                        minDist = sqDist(shift, enemy.relPos);
+                    }
+                }
+            }
+        }
+        if (pairEq(bestShift, { x: -100, y: -100 })) {
+            this.log("Nowhere to place new mage");
+            return;
+        }
+        this.lastCreated = [
+            SPECS.PREACHER,
+            bestShift,
+            "defense",
+            (enemy.unitType === SPECS.PROPHET),
+            copyPair(enemy.relPos)
+        ];
+        this.queueInitSignal(true);
+        this.sendSignal();
+        return this.buildUnit(SPECS.PREACHER, bestShift.x, bestShift.y);
+    }
+
+    // TODO: replace this.targetMine with mineIDs
     pilgrimInit() {
         this.log("Initializing pilgrim");
         this.findSymmetry();
@@ -440,25 +517,38 @@ class MyRobot extends BCAbstractRobot {
         }
         this.assignedArea = this.assignAreaToCastles();
         this.initResourceList();
+        // this.log("Target karb right after initializing it");
+        // this.log(this.targetKarb);
         if (this.targetResource === "karb") {
-            this.targetMine = {
-                x: this.targetKarb[this.targetID].pos.x,
-                y: this.targetKarb[this.targetID].pos.y
-            };
+            this.targetMine = copyPair(this.targetKarb[this.targetID].pos);
         }
         else {
-            this.targetMine = {
-                x: this.targetFuel[this.targetID].pos.x,
-                y: this.targetFuel[this.targetID].pos.y
-            };
+            this.targetMine = copyPair(this.targetFuel[this.targetID].pos);
         }
         this.bfsFromBase = bfs(this.base, this.map);
-        this.log(pairToString(this.targetMine));
+        // this.log("Original target mine: " + pairToString(this.targetKarb[this.targetID].pos));
+        // this.log("Target mine: " + pairToString(this.targetMine));
         this.bfsFromMine = bfs(this.targetMine, this.map);
+
+        this.avoidMinesMap = [];
+        for (let x = 0; x < this.map.length; x++)
+            this.avoidMinesMap.push(new Array(this.map.length));
+        for (let x = 0; x < this.map.length; x++) {
+            for (let y = 0; y < this.map.length; y++) {
+                // must be passable with no mine, except for personal mine
+                this.avoidMinesMap[y][x] = (this.map[y][x] && !this.karbonite_map[y][x] && !this.fuel_map[y][x]);
+                if (pairEq(this.targetMine, { x: x, y: y }))
+                    this.avoidMinesMap[y][x] = true;
+            }
+        }
+        this.avoidMinesBaseBFS = fullBFS(this.base, this.avoidMinesMap, SPECS.UNITS[this.me.unit].SPEED, true);
+        this.avoidMinesResourceBFS = fullBFS(this.targetMine, this.avoidMinesMap, SPECS.UNITS[this.me.unit].SPEED);
         this.log("I am a pilgrim that just got initialized");
         this.log("Target Resource: " + this.targetResource);
-        this.log("Base castle: " + JSON.stringify(this.base));
-        this.log("Target Mine: " + JSON.stringify(this.targetMine));
+        this.log("Base castle: " + pairToString(this.base));
+        this.log("Target Mine: " + pairToString(this.targetMine));
+        this.log("All target karb:");
+        this.log(this.targetKarb);
     }
 
     hasUnit(x, y, unitType) {
@@ -527,14 +617,21 @@ class MyRobot extends BCAbstractRobot {
         return;
     }
 
-    // for castles only
-    underAttack(visible) {
-        for (let i = 0; i<visible; i++){
+    findEnemies(visible) {
+        let enemyUnits = [];
+        for (let i = 0; i < visible.length; i++) {
             let r = visible[i];
             if (r.team !== this.me.team) {
-                this.me.team()
+                enemyUnits.push({ unitType: r.unit, relPos: subtractPair({ x: r.x, y: r.y }, this.loc) });
             }
         }
+        return enemyUnits;
+    }
+
+    canAttack(pos) {
+        return inGrid(pos, this.map.length)
+            && sqDist(pos, this.loc) >= SPECS.UNITS[this.me.unit].ATTACK_RADIUS[0]
+            && sqDist(pos, this.loc) <= SPECS.UNITS[this.me.unit].ATTACK_RADIUS[1];
     }
 
     turn() {
@@ -637,10 +734,12 @@ class MyRobot extends BCAbstractRobot {
                     this.log("Already arrived at mine, state changed to " + this.state);
                 }
                 else {
-                    let chosenMove = move(this.loc, this.bfsFromMine, this.map, this.getVisibleRobotMap(), SPECS.UNITS[this.me.unit].SPEED, this.lastMoveNothing);
+                    let chosenMove = move(this.loc, this.bfsFromMine, this.map, this.getVisibleRobotMap(), SPECS.UNITS[this.me.unit].SPEED);
                     this.log("Move: " + pairToString(chosenMove));
                     if (pairEq(chosenMove, { x: 0, y: 0 })) {
                         this.lastMoveNothing = true; // stuck
+                        // let fullBFS = fullBFS(this.base, this.avoidMinesMap, SPECS.UNITS[this.me.unit].SPEED);
+                        chosenMove = move(this.loc)
                         return this.pilgrimDontDoNothing();
                     }
                     else {
@@ -754,6 +853,7 @@ class MyRobot extends BCAbstractRobot {
 
                 // other init things
                 this.lastCreated = null;
+                this.prioritySignalQueue = new Queue();
                 this.signalQueue = new Queue();
                 return;
             }
@@ -790,7 +890,7 @@ class MyRobot extends BCAbstractRobot {
                     }
                 }
 
-                this.log("I am castle number " + this.castleNumber);
+                this.log("I am castle number #" + this.castleNumber);
                 // this.log("Castles IDs:");
                 // this.log(this.castles);
                 // this.log("is ID 438 new? " + this.isNewID(438));
@@ -827,24 +927,29 @@ class MyRobot extends BCAbstractRobot {
 
                 this.desiredKarbPilgrims = Math.min(4, this.targetKarb.length);
                 this.desiredFuelPilgrims = Math.min(4, this.targetFuel.length);
-                this.karbBuffer = 60; // make it dynamic
-                this.fuelBuffer = 200; // make it dynamic
+                this.karbBuffer = 60; // TODO: make it dynamic
+                this.fuelBuffer = 300; // TODO: make it dynamic
             }
 
             this.updateAllUnitLists(visible);
 
             let karbGoal = this.karbGoalStatus(this.desiredKarbPilgrims);
             let fuelGoal = this.fuelGoalStatus(this.desiredFuelPilgrims);
-            let attackStatus = this.underAttack(visible);
+            let visibleEnemies = this.findEnemies(visible);
             this.log("Karb goal: " + JSON.stringify(karbGoal));
             this.log("Fuel goal: " + JSON.stringify(fuelGoal));
 
-            if (this.hasSpaceAround()) {
-                // add defending against attacks as top priority
-                if (attackStatus.attacked) {
+            this.log(visibleEnemies);
 
+            if (this.hasSpaceAround()) {
+                if (visibleEnemies.length > 0) {
+                    this.log("Under attack!");
+                    visibleEnemies.sort(compareDist);
+                    if (this.canBuild(SPECS.PREACHER)) {
+                        return this.buildDefenseMage(visibleEnemies[0]);
+                    }
                 }
-                if (!karbGoal.reached) {
+                else if (!karbGoal.reached) {
                     if (karbGoal.canHelp && this.canMaintainBuffer(SPECS.PILGRIM)) {
                         return this.buildKarbPilgrim();
                     }
@@ -881,7 +986,142 @@ class MyRobot extends BCAbstractRobot {
             this.sendSignal();
         }
         else if (this.me.unit === SPECS.PREACHER) {
-            
+            this.loc = { x: this.me.x, y: this.me.y };
+            this.log("Mage Position: " + pairToString(this.loc));
+
+            if (this.me.turn === 1) {
+                this.receivedFirstMessage = false;
+                this.state = "waiting for init messages";
+            }
+
+            if (this.state === "waiting for init messages") {
+                this.log("Mage state: " + this.state);
+                let receivedMessage = false;
+                for (let i = 0; i < visible.length; i++) {
+                    let r = visible[i];
+                    if (r.team === this.me.team && r.unit === SPECS.CASTLE && this.isRadioing(r)) {
+                        let hash = r.signal;
+                        if (hash >> 15) {
+                            let shiftHash = (hash >> 12) & ((1 << 3) - 1);
+                            let shift = unhashShift(shiftHash);
+                            if (pairEq(subtractPair(this.loc, { x: r.x, y: r.y }), shift)) {
+                                // signal is meant for me!
+                                this.log("I got a message!");
+                                receivedMessage = true;
+
+                                this.baseCastle = { x: r.x, y: r.y };
+                                this.bfsFromBase = bfs(this.baseCastle, this.map);
+
+                                if ((hash >> 11) & 1) {
+                                    this.state = "defense";
+                                    if ((hash >> 10) & 1)
+                                        this.maxAdvanceSpeed = 4;
+                                    else
+                                        this.maxAdvanceSpeed = 2;
+                                    let enemyShiftX = ((hash >> 5) & ((1 << 5) - 1)) - 16;
+                                    let enemyShiftY = (hash & ((1 << 5) - 1)) - 16;
+                                    this.enemy = addPair(this.baseCastle, { x: enemyShiftX, y: enemyShiftY });
+                                    this.bfsFromEnemy = bfs(this.enemy, this.map);
+                                    this.log("I'm a defense mage that just got initialized");
+                                    this.log("Base castle: " + pairToString(this.baseCastle));
+                                    this.log("Heading to enemy at " + pairToString(this.enemy));
+                                }
+                                else {
+                                    this.state = "attack";
+                                    this.findSymmetry();
+                                    this.enemyCastle = this.reflect(this.baseCastle);
+                                    this.bfsFromEnemy = bfs(this.enemyCastle, this.map);
+                                    this.log("I'm an attack mage that just got initialized");
+                                    this.log("Base castle: " + pairToString(this.baseCastle));
+                                    this.log("Heading to enemy at " + pairToString(this.enemyCastle));
+                                }
+                            }
+                        }
+                    }
+                }
+                if (!receivedMessage) {
+                    this.log("No message received, state is still " + this.state);
+                }
+            }
+
+            let visibleMap = this.getVisibleRobotMap();
+            if (this.findEnemies(visible).length > 0) {
+                this.log("Mage sees enemies!");
+                let bestShift = { x: -100, y: -100 };
+                let maxHits = -100;
+                let closestHit = 100;
+                for (let dx = -4; dx <= 4; dx++) {
+                    for (let dy = -4; dy <= 4; dy++) {
+                        let shift = { x: dx, y: dy };
+                        let targetSquare = addPair(this.loc, shift);
+                        if (!this.canAttack(targetSquare))
+                            continue;
+                        // calculate splash result
+                        let hits = 0;
+                        let closestDist = 100;
+                        for (let dx2 = -1; dx2 <= 1; dx2++) {
+                            for (let dy2 = -1; dy2 <= 1; dy2++) {
+                                let splashed = addPair(targetSquare, { x: dx2, y: dy2 });
+                                if (!inGrid(splashed, this.map.length))
+                                    continue;
+                                let id = visibleMap[splashed.y][splashed.x];
+                                if (id > 0) {
+                                    if (this.getRobot(id).team !== this.me.team) {
+                                        hits++;
+                                        closestDist = Math.min(closestDist, norm({ x: dx + dx2, y: dy + dy2 }));
+                                    }
+                                    else {
+                                        hits--;
+                                    }
+                                }
+                            }
+                        }
+                        if (hits > maxHits) {
+                            bestShift = shift;
+                            maxHits = hits;
+                            closestHit = closestDist;
+                        }
+                        else if (hits === maxHits) {
+                            if (closestDist < closestHit) {
+                                bestShift = shift;
+                                maxHits = hits;
+                                closestHit = closestDist;
+                            }
+                        }
+                    }
+                }
+                this.log("Attacking " + pairToString(addPair(this.loc, bestShift)));
+                return this.attack(bestShift.x, bestShift.y);
+            }
+
+            if (this.state === "defense") {
+                let chosenMove = move(this.loc, this.bfsFromEnemy, this.map, this.getVisibleRobotMap(), this.maxAdvanceSpeed);
+                this.log("Move: " + pairToString(chosenMove));
+                if (pairEq(addPair(this.loc, chosenMove), this.enemy) && this.enoughFuelToMove(chosenMove))
+                    this.state = "returning";
+                return this.move(chosenMove.x, chosenMove.y);
+            }
+
+            if (this.state === "attack") {
+                if (sqDist(this.loc, this.enemyCastle) <= SPECS.UNITS[this.me.unit].VISION_RADIUS
+                    && this.getRobot(visibleMap[this.enemyCastle.y][this.enemyCastle.x]).unit !== SPECS.CASTLE) {
+                    this.log("Don't see an enemy castle in the expected location, must have been killed");
+                    this.state = "returning";
+                }
+                let chosenMove = move(this.loc, this.bfsFromEnemyCastle, this.map, this.getVisibleRobotMap(), SPECS.UNITS[this.me.unit].SPEED);
+                this.log("Move: " + pairToString(chosenMove));
+                if (sqDist(addPair(this.loc, chosenMove), this.enemyCastle) && this.enoughFuelToMove(chosenMove))
+                    this.state = "returning";
+                return this.move(chosenMove.x, chosenMove.y);
+            }
+
+            if (this.state === "returning") {
+                let chosenMove = move(this.loc, this.bfsFromBase, this.map, this.getVisibleRobotMap(), SPECS.UNITS[this.me.unit].SPEED); // slow retreat
+                this.log("Move: " + pairToString(chosenMove));
+                if (sqDist(addPair(this.loc, chosenMove), this.baseCastle) <= 16 && this.enoughFuelToMove(chosenMove))
+                    this.state = "waiting";
+                return this.move(chosenMove.x, chosenMove.y);
+            }
         }
         else { // other attacking unit
             this.loc = { x: this.me.x, y: this.me.y };

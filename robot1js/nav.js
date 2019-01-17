@@ -26,10 +26,12 @@ export function pairToString(p) {
     return "(" + p.x + ", " + p.y + ")";
 }
 
-export function empty(loc, map, robots = null) {
-    if (loc.x < 0 || loc.y < 0 || loc.x >= map.length || loc.y >= map.length)
-        return false;
-    return map[loc.y][loc.x] && (robots === null || robots[loc.y][loc.x] <= 0);
+export function inGrid(pos, length) {
+    return pos.x >= 0 && pos.y >= 0 && pos.x < length && pos.y < length;
+}
+
+export function empty(loc, map, robotMap = null) {
+    return inGrid(loc, map.length) && map[loc.y][loc.x] && (robotMap === null || robotMap[loc.y][loc.x] <= 0);
 }
 
 // TODO: when stuck, perform full bfs treating robot positions as fixed
@@ -53,6 +55,50 @@ export function bfs(start, map) {
                 q.enqueue(u);
                 visited[u.y][u.x] = true;
                 dist[u.y][u.x] = dist[v.y][v.x] + 1;
+            }
+        }
+    }
+    return dist;
+}
+
+export function fullBFS(start, map, speed, beside = false) {
+    let q = new Queue();
+    let visited = new Array(map.length);
+    let dist = new Array(map.length);
+    for (let i = 0; i < map.length; i++) {
+        visited[i] = new Array(map.length).fill(false);
+        dist[i] = new Array(map.length).fill(1000000);
+    }
+    if (beside) {
+        for (let dx = -1; dx <= 1; dx++) {
+            for (let dy = -1; dy <= 1; dy++) {
+                if (dx === 0 && dy === 0)
+                    continue;
+                let pos = { x: start.x + dx, y: start.y + dy };
+                if (empty(pos, map)) {
+                    q.enqueue(pos);
+                    visited[pos.y][pos.x] = true;
+                    dist[pos.y][pos.x] = 0;
+                }
+            }
+        }
+    }
+    else {
+        q.enqueue(start);
+        visited[start.y][start.x] = true;
+        dist[start.y][start.x] = 0;
+    }
+    while (!q.isEmpty()) {
+        let v = q.dequeue();
+        let s = Math.sqrt(speed);
+        for (let dx = -s; dx <= s; dx++) {
+            for (let dy = -s; dy <= s; dy++) {
+                let u = { x: v.x + dx, y: v.y + dy };
+                if (empty(u, map) && !visited[u.y][u.x]) {
+                    q.enqueue(u);
+                    visited[u.y][u.x] = true;
+                    dist[u.y][u.x] = dist[v.y][v.x] + 1;
+                }
             }
         }
     }
@@ -163,6 +209,17 @@ export function customSort(a, b) {
         return a.pos.x - b.pos.x;
     else
         return a.pos.y - b.pos.y;
+}
+
+export function compareDist(a, b) {
+    if (norm(a.relPos) !== norm(b.relPos))
+        return a.relPos - b.relPos;
+    else
+        return b.unitType - a.unitType;
+}
+
+export function copyPair(p) {
+    return { x: p.x, y: p.y };
 }
 
 // export default { addPair, sqDist, findClosestKarbonite, findClosestFuel, findClosestPosition };
