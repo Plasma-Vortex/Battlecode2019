@@ -252,84 +252,282 @@ class BCAbstractRobot {
     }
 }
 
-/*
-
-Queue.js
-
-A function to represent a queue
-
-Created by Kate Morley - http://code.iamkate.com/ - and released under the terms
-of the CC0 1.0 Universal legal code:
-
-http://creativecommons.org/publicdomain/zero/1.0/legalcode
-
-*/
-
-/* Creates a new queue. A queue is a first-in-first-out (FIFO) data structure -
- * items are added to the end of the queue and removed from the front.
+/**
+ * Copyright (c) 2013 Petka Antonov
+ * 
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:</p>
+ * 
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ * 
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
  */
-function Queue() {
-
-  // initialise the queue and offset
-  var queue = [];
-  var offset = 0;
-
-  // Returns the length of the queue.
-  this.getLength = function () {
-    return (queue.length - offset);
-  };
-
-  // Returns true if the queue is empty, and false otherwise.
-  this.isEmpty = function () {
-    return (queue.length == 0);
-  };
-
-  /* Enqueues the specified item. The parameter is:
-   *
-   * item - the item to enqueue
-   */
-  this.enqueue = function (item) {
-    queue.push(item);
-  };
-
-  /* Dequeues an item and returns it. If the queue is empty, the value
-   * 'undefined' is returned.
-   */
-  this.dequeue = function () {
-
-    // if the queue is empty, return immediately
-    if (queue.length == 0) return undefined;
-
-    // store the item at the front of the queue
-    var item = queue[offset];
-
-    // increment the offset and remove the free space if necessary
-    if (++offset * 2 >= queue.length) {
-      queue = queue.slice(offset);
-      offset = 0;
+function Deque(capacity) {
+    this._capacity = getCapacity(capacity);
+    this._length = 0;
+    this._front = 0;
+    if (isArray(capacity)) {
+        var len = capacity.length;
+        for (var i = 0; i < len; ++i) {
+            this[i] = capacity[i];
+        }
+        this._length = len;
     }
-
-    // return the dequeued item
-    return item;
-
-  };
-
-  /* Returns the item at the front of the queue (without dequeuing it). If the
-   * queue is empty then undefined is returned.
-   */
-  this.peek = function () {
-    return (queue.length > 0 ? queue[offset] : undefined);
-  };
-
 }
 
-// var q = new Queue();
+Deque.prototype.toArray = function Deque$toArray() {
+    var len = this._length;
+    var ret = new Array(len);
+    var front = this._front;
+    var capacity = this._capacity;
+    for (var j = 0; j < len; ++j) {
+        ret[j] = this[(front + j) & (capacity - 1)];
+    }
+    return ret;
+};
 
-// q.enqueue('item');
-// var x = q.dequeue();
-// console.log(x);
+Deque.prototype.push = function Deque$push(item) {
+    var argsLength = arguments.length;
+    var length = this._length;
+    if (argsLength > 1) {
+        var capacity = this._capacity;
+        if (length + argsLength > capacity) {
+            for (var i = 0; i < argsLength; ++i) {
+                this._checkCapacity(length + 1);
+                var j = (this._front + length) & (this._capacity - 1);
+                this[j] = arguments[i];
+                length++;
+                this._length = length;
+            }
+            return length;
+        }
+        else {
+            var j = this._front;
+            for (var i = 0; i < argsLength; ++i) {
+                this[(j + length) & (capacity - 1)] = arguments[i];
+                j++;
+            }
+            this._length = length + argsLength;
+            return length + argsLength;
+        }
 
-// export default {Queue};
+    }
+
+    if (argsLength === 0) return length;
+
+    this._checkCapacity(length + 1);
+    var i = (this._front + length) & (this._capacity - 1);
+    this[i] = item;
+    this._length = length + 1;
+    return length + 1;
+};
+
+Deque.prototype.pop = function Deque$pop() {
+    var length = this._length;
+    if (length === 0) {
+        return void 0;
+    }
+    var i = (this._front + length - 1) & (this._capacity - 1);
+    var ret = this[i];
+    this[i] = void 0;
+    this._length = length - 1;
+    return ret;
+};
+
+Deque.prototype.shift = function Deque$shift() {
+    var length = this._length;
+    if (length === 0) {
+        return void 0;
+    }
+    var front = this._front;
+    var ret = this[front];
+    this[front] = void 0;
+    this._front = (front + 1) & (this._capacity - 1);
+    this._length = length - 1;
+    return ret;
+};
+
+Deque.prototype.unshift = function Deque$unshift(item) {
+    var length = this._length;
+    var argsLength = arguments.length;
+
+
+    if (argsLength > 1) {
+        var capacity = this._capacity;
+        if (length + argsLength > capacity) {
+            for (var i = argsLength - 1; i >= 0; i--) {
+                this._checkCapacity(length + 1);
+                var capacity = this._capacity;
+                var j = (((( this._front - 1 ) &
+                    ( capacity - 1) ) ^ capacity ) - capacity );
+                this[j] = arguments[i];
+                length++;
+                this._length = length;
+                this._front = j;
+            }
+            return length;
+        }
+        else {
+            var front = this._front;
+            for (var i = argsLength - 1; i >= 0; i--) {
+                var j = (((( front - 1 ) &
+                    ( capacity - 1) ) ^ capacity ) - capacity );
+                this[j] = arguments[i];
+                front = j;
+            }
+            this._front = front;
+            this._length = length + argsLength;
+            return length + argsLength;
+        }
+    }
+
+    if (argsLength === 0) return length;
+
+    this._checkCapacity(length + 1);
+    var capacity = this._capacity;
+    var i = (((( this._front - 1 ) &
+        ( capacity - 1) ) ^ capacity ) - capacity );
+    this[i] = item;
+    this._length = length + 1;
+    this._front = i;
+    return length + 1;
+};
+
+Deque.prototype.peekBack = function Deque$peekBack() {
+    var length = this._length;
+    if (length === 0) {
+        return void 0;
+    }
+    var index = (this._front + length - 1) & (this._capacity - 1);
+    return this[index];
+};
+
+Deque.prototype.peekFront = function Deque$peekFront() {
+    if (this._length === 0) {
+        return void 0;
+    }
+    return this[this._front];
+};
+
+Deque.prototype.get = function Deque$get(index) {
+    var i = index;
+    if ((i !== (i | 0))) {
+        return void 0;
+    }
+    var len = this._length;
+    if (i < 0) {
+        i = i + len;
+    }
+    if (i < 0 || i >= len) {
+        return void 0;
+    }
+    return this[(this._front + i) & (this._capacity - 1)];
+};
+
+Deque.prototype.isEmpty = function Deque$isEmpty() {
+    return this._length === 0;
+};
+
+Deque.prototype.clear = function Deque$clear() {
+    var len = this._length;
+    var front = this._front;
+    var capacity = this._capacity;
+    for (var j = 0; j < len; ++j) {
+        this[(front + j) & (capacity - 1)] = void 0;
+    }
+    this._length = 0;
+    this._front = 0;
+};
+
+Deque.prototype.toString = function Deque$toString() {
+    return this.toArray().toString();
+};
+
+Deque.prototype.valueOf = Deque.prototype.toString;
+Deque.prototype.removeFront = Deque.prototype.shift;
+Deque.prototype.removeBack = Deque.prototype.pop;
+Deque.prototype.insertFront = Deque.prototype.unshift;
+Deque.prototype.insertBack = Deque.prototype.push;
+Deque.prototype.enqueue = Deque.prototype.push;
+Deque.prototype.dequeue = Deque.prototype.shift;
+Deque.prototype.toJSON = Deque.prototype.toArray;
+
+Object.defineProperty(Deque.prototype, "length", {
+    get: function() {
+        return this._length;
+    },
+    set: function() {
+        throw new RangeError("");
+    }
+});
+
+Deque.prototype._checkCapacity = function Deque$_checkCapacity(size) {
+    if (this._capacity < size) {
+        this._resizeTo(getCapacity(this._capacity * 1.5 + 16));
+    }
+};
+
+Deque.prototype._resizeTo = function Deque$_resizeTo(capacity) {
+    var oldCapacity = this._capacity;
+    this._capacity = capacity;
+    var front = this._front;
+    var length = this._length;
+    if (front + length > oldCapacity) {
+        var moveItemsCount = (front + length) & (oldCapacity - 1);
+        arrayMove(this, 0, this, oldCapacity, moveItemsCount);
+    }
+};
+
+
+var isArray = Array.isArray;
+
+function arrayMove(src, srcIndex, dst, dstIndex, len) {
+    for (var j = 0; j < len; ++j) {
+        dst[j + dstIndex] = src[j + srcIndex];
+        src[j + srcIndex] = void 0;
+    }
+}
+
+function pow2AtLeast(n) {
+    n = n >>> 0;
+    n = n - 1;
+    n = n | (n >> 1);
+    n = n | (n >> 2);
+    n = n | (n >> 4);
+    n = n | (n >> 8);
+    n = n | (n >> 16);
+    return n + 1;
+}
+
+function getCapacity(capacity) {
+    if (typeof capacity !== "number") {
+        if (isArray(capacity)) {
+            capacity = capacity.length;
+        }
+        else {
+            return 16;
+        }
+    }
+    return pow2AtLeast(
+        Math.min(
+            Math.max(16, capacity), 1073741824)
+    );
+}
+
+// module.exports = Deque;
+
+// import { Queue } from './Queue.src.js';
 
 function addPair(a, b) {
     return {
@@ -367,23 +565,23 @@ function empty(loc, map, robotMap = null) {
 
 // TODO: when stuck, perform full bfs treating robot positions as fixed
 function bfs(start, map) {
-    let q = new Queue();
+    let q = new Deque(512);
     let visited = new Array(map.length);
     let dist = new Array(map.length);
     for (let i = 0; i < map.length; i++) {
         visited[i] = new Array(map.length).fill(false);
         dist[i] = new Array(map.length).fill(1000000);
     }
-    q.enqueue(start);
+    q.push(start);
     visited[start.y][start.x] = true;
     dist[start.y][start.x] = 0;
     while (!q.isEmpty()) {
-        let v = q.dequeue();
+        let v = q.shift();
         let adj = [[1, 0], [0, 1], [-1, 0], [0, -1]];
         for (let i = 0; i < 4; i++) {
             let u = { x: v.x + adj[i][0], y: v.y + adj[i][1] };
             if (empty(u, map) && !visited[u.y][u.x]) {
-                q.enqueue(u);
+                q.push(u);
                 visited[u.y][u.x] = true;
                 dist[u.y][u.x] = dist[v.y][v.x] + 1;
             }
@@ -393,7 +591,7 @@ function bfs(start, map) {
 }
 
 function fullBFS(start, map, speed, beside = false) {
-    let q = new Queue();
+    let q = new Deque(512);
     let visited = new Array(map.length);
     let dist = new Array(map.length);
     for (let i = 0; i < map.length; i++) {
@@ -407,7 +605,7 @@ function fullBFS(start, map, speed, beside = false) {
                     continue;
                 let pos = { x: start.x + dx, y: start.y + dy };
                 if (empty(pos, map)) {
-                    q.enqueue(pos);
+                    q.push(pos);
                     visited[pos.y][pos.x] = true;
                     dist[pos.y][pos.x] = 0;
                 }
@@ -415,21 +613,28 @@ function fullBFS(start, map, speed, beside = false) {
         }
     }
     else {
-        q.enqueue(start);
+        q.push(start);
         visited[start.y][start.x] = true;
         dist[start.y][start.x] = 0;
     }
+    let s = Math.floor(Math.sqrt(speed));
+    let shifts = [];
+    for (let dx = -s; dx <= s; dx++) {
+        for (let dy = -s; dy <= s; dy++) {
+            let shift = { x: dx, y: dy };
+            if (norm(shift) <= speed) {
+                shifts.push(shift);
+            }
+        }
+    }
     while (!q.isEmpty()) {
-        let v = q.dequeue();
-        let s = Math.sqrt(speed);
-        for (let dx = -s; dx <= s; dx++) {
-            for (let dy = -s; dy <= s; dy++) {
-                let u = { x: v.x + dx, y: v.y + dy };
-                if (empty(u, map) && !visited[u.y][u.x]) {
-                    q.enqueue(u);
-                    visited[u.y][u.x] = true;
-                    dist[u.y][u.x] = dist[v.y][v.x] + 1;
-                }
+        let v = q.shift();
+        for (let i = 0; i < shifts.length; i++) {
+            let u = addPair(v, shifts[i]);
+            if (empty(u, map) && !visited[u.y][u.x]) {
+                q.push(u);
+                visited[u.y][u.x] = true;
+                dist[u.y][u.x] = dist[v.y][v.x] + 1;
             }
         }
     }
@@ -509,7 +714,7 @@ function copyPair(p) {
 // export default { addPair, sqDist, findClosestKarbonite, findClosestFuel, findClosestPosition };
 
 // 3 castle test seed: 1505486586
-// pilgrim goes to enemy mine seed: 2045874012
+// times out: 1909424986 (pilgrim bfs)
 
 class MyRobot extends BCAbstractRobot {
     canBuild(unitType) {
@@ -544,7 +749,6 @@ class MyRobot extends BCAbstractRobot {
                     || this.karbonite_map[y][x] !== this.karbonite_map[y][this.map.length - x - 1]
                     || this.fuel_map[y][x] !== this.fuel_map[y][this.map.length - x - 1]) {
                     this.symmetry = "y";
-                    this.log("Symmetry is " + this.symmetry);
                     return;
                 }
             }
@@ -555,14 +759,12 @@ class MyRobot extends BCAbstractRobot {
                     || this.karbonite_map[y][x] !== this.karbonite_map[this.map.length - y - 1][x]
                     || this.fuel_map[y][x] !== this.fuel_map[this.map.length - y - 1][x]) {
                     this.symmetry = "x";
-                    this.log("Symmetry is " + this.symmetry);
                     return;
                 }
             }
         }
         // should also check if two of your castles are reflections of each other
         this.symmetry = "xy";
-        this.log("Symmetry is " + this.symmetry);
     }
 
     reflect(pt) {
@@ -611,12 +813,6 @@ class MyRobot extends BCAbstractRobot {
                 else {
                     area[y][x] = { team: -1, castle: yourBestCastle, dist: yourMinDist };
                 }
-                if (this.karbonite_map[y][x]){
-                    this.log(pairToString({x:x, y:y}) + " has karbonite");
-                    this.log(area[y][x]);
-                    this.log("Enemy castle positions");
-                    this.log(this.enemyCastlePos);
-                }
             }
         }
         return area;
@@ -640,10 +836,10 @@ class MyRobot extends BCAbstractRobot {
             }
             hash |= this.lastCreated[3];
             if (priority) {
-                this.prioritySignalQueue.enqueue({ signal: hash, dist: norm(shift) });
+                this.prioritySignalQueue.push({ signal: hash, dist: norm(shift) });
             }
             else {
-                this.signalQueue.enqueue({ signal: hash, dist: norm(shift) });
+                this.signalQueue.push({ signal: hash, dist: norm(shift) });
             }
 
             for (let i = 0; i < this.castles.length; i++) {
@@ -654,9 +850,9 @@ class MyRobot extends BCAbstractRobot {
                 hash |= this.castlePos[i].x << 6;
                 hash |= this.castlePos[i].y;
                 if (priority)
-                    this.prioritySignalQueue.enqueue({ signal: hash, dist: norm(shift) });
+                    this.prioritySignalQueue.push({ signal: hash, dist: norm(shift) });
                 else
-                    this.signalQueue.enqueue({ signal: hash, dist: norm(shift) });
+                    this.signalQueue.push({ signal: hash, dist: norm(shift) });
             }
         }
         else if (this.lastCreated[0] === SPECS.PREACHER) {
@@ -673,9 +869,9 @@ class MyRobot extends BCAbstractRobot {
             hash |= (this.lastCreated[4].x + 16) << 5; // specify shifted relative x-coord of enemy
             hash |= this.lastCreated[4].y + 16; // specify shifted relative y-coord of enemy
             if (priority)
-                this.prioritySignalQueue.enqueue({ signal: hash, dist: norm(shift) });
+                this.prioritySignalQueue.push({ signal: hash, dist: norm(shift) });
             else
-                this.signalQueue.enqueue({ signal: hash, dist: norm(shift) });
+                this.signalQueue.push({ signal: hash, dist: norm(shift) });
         }
     }
 
@@ -689,18 +885,18 @@ class MyRobot extends BCAbstractRobot {
 
         let message = 0; // will be overwritten
         if (!this.prioritySignalQueue.isEmpty()) {
-            if (this.fuel < this.prioritySignalQueue.peek().dist) {
+            if (this.fuel < this.prioritySignalQueue.peekFront().dist) {
                 this.log("Not enough fuel to send message of distance " + this.prioritySignalQueue.peek().dist);
                 return; // must save up fuel
             }
-            message = this.prioritySignalQueue.dequeue();
+            message = this.prioritySignalQueue.shift();
         }
         else {
-            if (this.fuel < this.signalQueue.peek().dist) {
-                this.log("Not enough fuel to send message of distance " + this.signalQueue.peek().dist);
+            if (this.fuel < this.signalQueue.peekFront().dist) {
+                this.log("Not enough fuel to send message of distance " + this.signalQueue.peekFront().dist);
                 return; // must save up fuel
             }
-            message = this.signalQueue.dequeue();
+            message = this.signalQueue.shift();
         }
         this.log("Sending signal " + message.signal);
         this.signal(message.signal, message.dist);
@@ -1026,16 +1222,18 @@ class MyRobot extends BCAbstractRobot {
         this.initResourceList();
         // this.log("Target karb right after initializing it");
         // this.log(this.targetKarb);
+
         if (this.targetResource === "karb") {
             this.targetMine = copyPair(this.targetKarb[this.targetID].pos);
         }
         else {
             this.targetMine = copyPair(this.targetFuel[this.targetID].pos);
         }
-        this.bfsFromBase = bfs(this.base, this.map);
+
+        // this.bfsFromBase = bfs(this.base, this.map);
         // this.log("Original target mine: " + pairToString(this.targetKarb[this.targetID].pos));
         // this.log("Target mine: " + pairToString(this.targetMine));
-        this.bfsFromMine = bfs(this.targetMine, this.map);
+        // this.bfsFromMine = bfs(this.targetMine, this.map);
 
         this.avoidMinesMap = [];
         for (let x = 0; x < this.map.length; x++)
@@ -1048,14 +1246,20 @@ class MyRobot extends BCAbstractRobot {
                     this.avoidMinesMap[y][x] = true;
             }
         }
+        // change when castle is destroyed
+        for (let i = 0; i < this.castlePos.length; i++) {
+            this.avoidMinesMap[this.castlePos[i].y][this.castlePos[i].x] = false;
+            this.avoidMinesMap[this.enemyCastlePos[i].y][this.enemyCastlePos[i].x] = false;
+        }
+        // set false for churches too
         this.avoidMinesBaseBFS = fullBFS(this.base, this.avoidMinesMap, SPECS.UNITS[this.me.unit].SPEED, true);
         this.avoidMinesResourceBFS = fullBFS(this.targetMine, this.avoidMinesMap, SPECS.UNITS[this.me.unit].SPEED);
         this.log("I am a pilgrim that just got initialized");
         this.log("Target Resource: " + this.targetResource);
         this.log("Base castle: " + pairToString(this.base));
         this.log("Target Mine: " + pairToString(this.targetMine));
-        this.log("All target karb:");
-        this.log(this.targetKarb);
+        // this.log("All target karb:");
+        // this.log(this.targetKarb);
     }
 
     hasUnit(x, y, unitType) {
@@ -1084,7 +1288,7 @@ class MyRobot extends BCAbstractRobot {
         if (this.karbonite_map[this.loc.y][this.loc.x]
             && this.me.karbonite < SPECS.UNITS[this.me.unit].KARBONITE_CAPACITY
             && this.fuel >= SPECS.MINE_FUEL_COST) {
-            this.lastMoveNothing = false;
+            // this.lastMoveNothing = false;
             this.log("Mining random karb mine");
             if (this.state !== "waiting for castle locations" && this.targetResource === "karb") {
                 if (this.me.karbonite + SPECS.KARBONITE_YIELD >= SPECS.UNITS[this.me.unit].KARBONITE_CAPACITY) {
@@ -1097,7 +1301,7 @@ class MyRobot extends BCAbstractRobot {
         if (this.fuel_map[this.loc.y][this.loc.x]
             && this.me.fuel < SPECS.UNITS[this.me.unit].FUEL_CAPACITY
             && this.fuel >= SPECS.MINE_FUEL_COST) {
-            this.lastMoveNothing = false;
+            // this.lastMoveNothing = false;
             this.log("Mining random fuel mine");
             if (this.state !== "waiting for castle locations" && this.targetResource === "fuel") {
                 if (this.me.fuel + SPECS.FUEL_YIELD >= SPECS.UNITS[this.me.unit].FUEL_CAPACITY) {
@@ -1112,14 +1316,14 @@ class MyRobot extends BCAbstractRobot {
                 if (this.hasUnit(this.loc.x + dx, this.loc.y + dy, SPECS.CASTLE)
                     || this.hasUnit(this.loc.x + dx, this.loc.y + dy, SPECS.CHURCH)) {
                     if (this.me.karbonite > 0 || this.me.fuel > 0) {
-                        this.lastMoveNothing = false;
+                        // this.lastMoveNothing = false;
                         this.log("Depositing resources at random castle/church");
                         return this.give(dx, dy, this.me.karbonite, this.me.fuel);
                     }
                 }
             }
         }
-        this.lastMoveNothing = true;
+        // this.lastMoveNothing = true;
         this.log("I wasted my turn");
         return;
     }
@@ -1143,6 +1347,7 @@ class MyRobot extends BCAbstractRobot {
 
     turn() {
         this.log("START TURN " + this.me.turn);
+        this.log("Time remaining: " + this.me.time);
         this.alreadySignaled = false;
         let visible = this.getVisibleRobots();
 
@@ -1184,7 +1389,7 @@ class MyRobot extends BCAbstractRobot {
                                     this.log(this.castlePos);
 
                                     this.base = { x: r.x, y: r.y };
-                                    this.churches = new Array((hash >> 6) & ((1 << 2) - 1));
+                                    this.churches = new Array((hash >> 6) & ((1 << 2) - 1)); // TODO: don't send church info
                                     if (hash & (1 << 4))
                                         this.targetResource = "fuel";
                                     else
@@ -1241,27 +1446,30 @@ class MyRobot extends BCAbstractRobot {
                     this.log("Already arrived at mine, state changed to " + this.state);
                 }
                 else {
-                    let chosenMove = move(this.loc, this.bfsFromMine, this.map, this.getVisibleRobotMap(), SPECS.UNITS[this.me.unit].SPEED);
+                    // let chosenMove = move(this.loc, this.bfsFromMine, this.map, this.getVisibleRobotMap(), SPECS.UNITS[this.me.unit].SPEED);
+                    let chosenMove = move(this.loc, this.avoidMinesResourceBFS, this.map, this.getVisibleRobotMap(), SPECS.UNITS[this.me.unit].SPEED);
                     this.log("Move: " + pairToString(chosenMove));
                     if (pairEq(chosenMove, { x: 0, y: 0 })) {
-                        this.lastMoveNothing = true; // stuck
-                        // let fullBFS = fullBFS(this.base, this.avoidMinesMap, SPECS.UNITS[this.me.unit].SPEED);
-                        chosenMove = move(this.loc);
-                        return this.pilgrimDontDoNothing();
+                        // chosenMove = move(this.loc, this.bfsFromMine, this.map, this.getVisibleRobotMap(), SPECS.UNITS[this.me.unit].SPEED);
+                        this.log("New move: " + pairToString(chosenMove));
+                        if (pairEq(chosenMove, { x: 0, y: 0 })) {
+                            // this.lastMoveNothing = true; // stuck
+                            // TODO: signal when stuck
+                            return this.pilgrimDontDoNothing();
+                        }
                     }
-                    else {
-                        this.lastMoveNothing = false;
-                        if (pairEq(addPair(this.loc, chosenMove), this.targetMine) && this.enoughFuelToMove(chosenMove))
-                            this.state = "mining";
-                        return this.move(chosenMove.x, chosenMove.y);
-                    }
+                    // this.lastMoveNothing = false;
+                    // TODO: make pilgrims follow fuel buffer
+                    if (pairEq(addPair(this.loc, chosenMove), this.targetMine) && this.enoughFuelToMove(chosenMove))
+                        this.state = "mining";
+                    return this.move(chosenMove.x, chosenMove.y);
                 }
             }
 
             if (this.state === "mining") {
                 this.log("Pilgrim state: " + this.state);
                 if (this.fuel >= SPECS.MINE_FUEL_COST) {
-                    this.lastMoveNothing = false;
+                    // this.lastMoveNothing = false;
                     if (this.targetResource === "karb") {
                         if (this.me.karbonite + SPECS.KARBONITE_YIELD >= SPECS.UNITS[this.me.unit].KARBONITE_CAPACITY) {
                             this.log("Storage will be full next round, swiching state to go to base");
@@ -1279,7 +1487,7 @@ class MyRobot extends BCAbstractRobot {
                 }
                 else {
                     this.log("Not enough fuel to mine");
-                    this.lastMoveNothing = true;
+                    // this.lastMoveNothing = true;
                     return this.pilgrimDontDoNothing();
                 }
             }
@@ -1291,20 +1499,23 @@ class MyRobot extends BCAbstractRobot {
                     this.log("Already arrived at base, state switching to " + this.state);
                 }
                 else {
-                    let chosenMove = move(this.loc, this.bfsFromBase, this.map, this.getVisibleRobotMap(), SPECS.UNITS[this.me.unit].SPEED, this.lastMoveNothing);
+                    let chosenMove = move(this.loc, this.avoidMinesBaseBFS, this.map, this.getVisibleRobotMap(), SPECS.UNITS[this.me.unit].SPEED);
+                    // let chosenMove = move(this.loc, this.bfsFromBase, this.map, this.getVisibleRobotMap(), SPECS.UNITS[this.me.unit].SPEED, this.lastMoveNothing);
                     this.log("Move: " + pairToString(chosenMove));
                     if (pairEq(chosenMove, { x: 0, y: 0 })) {
-                        this.lastMoveNothing = true;
-                        return this.pilgrimDontDoNothing();
-                    }
-                    else {
-                        this.lastMoveNothing = false;
-                        if (sqDist(addPair(this.loc, chosenMove), this.base) <= 2 && this.enoughFuelToMove(chosenMove)) {
-                            this.state = "depositing";
-                            this.log("Will arrive at base next turn, state switching to " + this.state);
+                        // chosenMove = move(this.loc, this.bfsFromBase, this.map, this.getVisibleRobotMap(), SPECS.UNITS[this.me.unit].SPEED);
+                        this.log("New move: " + pairToString(chosenMove));
+                        if (pairEq(chosenMove, { x: 0, y: 0 })) {
+                            // this.lastMoveNothing = true;
+                            return this.pilgrimDontDoNothing();
                         }
-                        return this.move(chosenMove.x, chosenMove.y);
                     }
+                    // this.lastMoveNothing = false;
+                    if (sqDist(addPair(this.loc, chosenMove), this.base) <= 2 && this.enoughFuelToMove(chosenMove)) {
+                        this.state = "depositing";
+                        this.log("Will arrive at base next turn, state switching to " + this.state);
+                    }
+                    return this.move(chosenMove.x, chosenMove.y);
                 }
             }
 
@@ -1312,7 +1523,7 @@ class MyRobot extends BCAbstractRobot {
                 this.log("Pilgrim state: " + this.state);
                 if (this.me.karbonite > 0 || this.me.fuel > 0) {
                     this.log("Depositing resources at base");
-                    this.lastMoveNothing = false;
+                    // this.lastMoveNothing = false;
                     this.state = "going to mine";
                     this.log("State for next round changed to " + this.state);
                     return this.give(this.base.x - this.loc.x, this.base.y - this.loc.y, this.me.karbonite, this.me.fuel);
@@ -1334,7 +1545,7 @@ class MyRobot extends BCAbstractRobot {
             if (this.me.turn === 1) {
                 this.castles = [];
                 this.castlePos = [];
-                this.churches = [];
+                this.churchPos = [];
                 for (let i = 0; i < visible.length; i++) {
                     let r = visible[i];
                     if (r.team === this.me.team) { // cannot check r.unit === SPECS.CASTLE because r.unit is undefined when r is not visible
@@ -1360,8 +1571,8 @@ class MyRobot extends BCAbstractRobot {
 
                 // other init things
                 this.lastCreated = null;
-                this.prioritySignalQueue = new Queue();
-                this.signalQueue = new Queue();
+                this.prioritySignalQueue = new Deque();
+                this.signalQueue = new Deque();
                 return;
             }
             else if (this.me.turn === 2) {
