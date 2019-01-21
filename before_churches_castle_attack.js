@@ -1,9 +1,718 @@
-import { BCAbstractRobot, SPECS } from 'battlecode';
-// import {reflect, getDir, rotate, toCoordinateDir, toCompassDir, goto, sqDist} from 'nav';
+'use strict';
 
-import { addPair, subtractPair, pairEq, inGrid, pairToString, sqDist, hashShift, unhashShift, norm, empty, bfs, fullBFS, move, findClosestKarbonite, findClosestFuel, findClosestPosition, customSort, compareDist, copyPair, } from './nav.js';
+var SPECS = {"COMMUNICATION_BITS":16,"CASTLE_TALK_BITS":8,"MAX_ROUNDS":1000,"TRICKLE_FUEL":25,"INITIAL_KARBONITE":100,"INITIAL_FUEL":500,"MINE_FUEL_COST":1,"KARBONITE_YIELD":2,"FUEL_YIELD":10,"MAX_TRADE":1024,"MAX_BOARD_SIZE":64,"MAX_ID":4096,"CASTLE":0,"CHURCH":1,"PILGRIM":2,"CRUSADER":3,"PROPHET":4,"PREACHER":5,"RED":0,"BLUE":1,"CHESS_INITIAL":100,"CHESS_EXTRA":20,"TURN_MAX_TIME":200,"MAX_MEMORY":50000000,"UNITS":[{"CONSTRUCTION_KARBONITE":null,"CONSTRUCTION_FUEL":null,"KARBONITE_CAPACITY":null,"FUEL_CAPACITY":null,"SPEED":0,"FUEL_PER_MOVE":null,"STARTING_HP":200,"VISION_RADIUS":100,"ATTACK_DAMAGE":10,"ATTACK_RADIUS":[1,64],"ATTACK_FUEL_COST":10,"DAMAGE_SPREAD":0},{"CONSTRUCTION_KARBONITE":50,"CONSTRUCTION_FUEL":200,"KARBONITE_CAPACITY":null,"FUEL_CAPACITY":null,"SPEED":0,"FUEL_PER_MOVE":null,"STARTING_HP":100,"VISION_RADIUS":100,"ATTACK_DAMAGE":0,"ATTACK_RADIUS":0,"ATTACK_FUEL_COST":0,"DAMAGE_SPREAD":0},{"CONSTRUCTION_KARBONITE":10,"CONSTRUCTION_FUEL":50,"KARBONITE_CAPACITY":20,"FUEL_CAPACITY":100,"SPEED":4,"FUEL_PER_MOVE":1,"STARTING_HP":10,"VISION_RADIUS":100,"ATTACK_DAMAGE":null,"ATTACK_RADIUS":null,"ATTACK_FUEL_COST":null,"DAMAGE_SPREAD":null},{"CONSTRUCTION_KARBONITE":15,"CONSTRUCTION_FUEL":50,"KARBONITE_CAPACITY":20,"FUEL_CAPACITY":100,"SPEED":9,"FUEL_PER_MOVE":1,"STARTING_HP":40,"VISION_RADIUS":49,"ATTACK_DAMAGE":10,"ATTACK_RADIUS":[1,16],"ATTACK_FUEL_COST":10,"DAMAGE_SPREAD":0},{"CONSTRUCTION_KARBONITE":25,"CONSTRUCTION_FUEL":50,"KARBONITE_CAPACITY":20,"FUEL_CAPACITY":100,"SPEED":4,"FUEL_PER_MOVE":2,"STARTING_HP":20,"VISION_RADIUS":64,"ATTACK_DAMAGE":10,"ATTACK_RADIUS":[16,64],"ATTACK_FUEL_COST":25,"DAMAGE_SPREAD":0},{"CONSTRUCTION_KARBONITE":30,"CONSTRUCTION_FUEL":50,"KARBONITE_CAPACITY":20,"FUEL_CAPACITY":100,"SPEED":4,"FUEL_PER_MOVE":3,"STARTING_HP":60,"VISION_RADIUS":16,"ATTACK_DAMAGE":20,"ATTACK_RADIUS":[1,16],"ATTACK_FUEL_COST":15,"DAMAGE_SPREAD":3}]};
+
+function insulate(content) {
+    return JSON.parse(JSON.stringify(content));
+}
+
+class BCAbstractRobot {
+    constructor() {
+        this._bc_reset_state();
+    }
+
+    // Hook called by runtime, sets state and calls turn.
+    _do_turn(game_state) {
+        this._bc_game_state = game_state;
+        this.id = game_state.id;
+        this.karbonite = game_state.karbonite;
+        this.fuel = game_state.fuel;
+        this.last_offer = game_state.last_offer;
+
+        this.me = this.getRobot(this.id);
+
+        if (this.me.turn === 1) {
+            this.map = game_state.map;
+            this.karbonite_map = game_state.karbonite_map;
+            this.fuel_map = game_state.fuel_map;
+        }
+
+        try {
+            var t = this.turn();
+        } catch (e) {
+            t = this._bc_error_action(e);
+        }
+
+        if (!t) t = this._bc_null_action();
+
+        t.signal = this._bc_signal;
+        t.signal_radius = this._bc_signal_radius;
+        t.logs = this._bc_logs;
+        t.castle_talk = this._bc_castle_talk;
+
+        this._bc_reset_state();
+
+        return t;
+    }
+
+    _bc_reset_state() {
+        // Internal robot state representation
+        this._bc_logs = [];
+        this._bc_signal = 0;
+        this._bc_signal_radius = 0;
+        this._bc_game_state = null;
+        this._bc_castle_talk = 0;
+        this.me = null;
+        this.id = null;
+        this.fuel = null;
+        this.karbonite = null;
+        this.last_offer = null;
+    }
+
+    // Action template
+    _bc_null_action() {
+        return {
+            'signal': this._bc_signal,
+            'signal_radius': this._bc_signal_radius,
+            'logs': this._bc_logs,
+            'castle_talk': this._bc_castle_talk
+        };
+    }
+
+    _bc_error_action(e) {
+        var a = this._bc_null_action();
+        
+        if (e.stack) a.error = e.stack;
+        else a.error = e.toString();
+
+        return a;
+    }
+
+    _bc_action(action, properties) {
+        var a = this._bc_null_action();
+        if (properties) for (var key in properties) { a[key] = properties[key]; }
+        a['action'] = action;
+        return a;
+    }
+
+    _bc_check_on_map(x, y) {
+        return x >= 0 && x < this._bc_game_state.shadow[0].length && y >= 0 && y < this._bc_game_state.shadow.length;
+    }
+    
+    log(message) {
+        this._bc_logs.push(JSON.stringify(message));
+    }
+
+    // Set signal value.
+    signal(value, radius) {
+        // Check if enough fuel to signal, and that valid value.
+        
+        var fuelNeeded = Math.ceil(Math.sqrt(radius));
+        if (this.fuel < fuelNeeded) throw "Not enough fuel to signal given radius.";
+        if (!Number.isInteger(value) || value < 0 || value >= Math.pow(2,SPECS.COMMUNICATION_BITS)) throw "Invalid signal, must be int within bit range.";
+        if (radius > 2*Math.pow(SPECS.MAX_BOARD_SIZE-1,2)) throw "Signal radius is too big.";
+
+        this._bc_signal = value;
+        this._bc_signal_radius = radius;
+
+        this.fuel -= fuelNeeded;
+    }
+
+    // Set castle talk value.
+    castleTalk(value) {
+        // Check if enough fuel to signal, and that valid value.
+
+        if (!Number.isInteger(value) || value < 0 || value >= Math.pow(2,SPECS.CASTLE_TALK_BITS)) throw "Invalid castle talk, must be between 0 and 2^8.";
+
+        this._bc_castle_talk = value;
+    }
+
+    proposeTrade(karbonite, fuel) {
+        if (this.me.unit !== SPECS.CASTLE) throw "Only castles can trade.";
+        if (!Number.isInteger(karbonite) || !Number.isInteger(fuel)) throw "Must propose integer valued trade."
+        if (Math.abs(karbonite) >= SPECS.MAX_TRADE || Math.abs(fuel) >= SPECS.MAX_TRADE) throw "Cannot trade over " + SPECS.MAX_TRADE + " in a given turn.";
+
+        return this._bc_action('trade', {
+            trade_fuel: fuel,
+            trade_karbonite: karbonite
+        });
+    }
+
+    buildUnit(unit, dx, dy) {
+        if (this.me.unit !== SPECS.PILGRIM && this.me.unit !== SPECS.CASTLE && this.me.unit !== SPECS.CHURCH) throw "This unit type cannot build.";
+        if (this.me.unit === SPECS.PILGRIM && unit !== SPECS.CHURCH) throw "Pilgrims can only build churches.";
+        if (this.me.unit !== SPECS.PILGRIM && unit === SPECS.CHURCH) throw "Only pilgrims can build churches.";
+        
+        if (!Number.isInteger(dx) || !Number.isInteger(dx) || dx < -1 || dy < -1 || dx > 1 || dy > 1) throw "Can only build in adjacent squares.";
+        if (!this._bc_check_on_map(this.me.x+dx,this.me.y+dy)) throw "Can't build units off of map.";
+        if (this._bc_game_state.shadow[this.me.y+dy][this.me.x+dx] > 0) throw "Cannot build on occupied tile.";
+        if (!this.map[this.me.y+dy][this.me.x+dx]) throw "Cannot build onto impassable terrain.";
+        if (this.karbonite < SPECS.UNITS[unit].CONSTRUCTION_KARBONITE || this.fuel < SPECS.UNITS[unit].CONSTRUCTION_FUEL) throw "Cannot afford to build specified unit.";
+
+        return this._bc_action('build', {
+            dx: dx, dy: dy,
+            build_unit: unit
+        });
+    }
+
+    move(dx, dy) {
+        if (this.me.unit === SPECS.CASTLE || this.me.unit === SPECS.CHURCH) throw "Churches and Castles cannot move.";
+        if (!this._bc_check_on_map(this.me.x+dx,this.me.y+dy)) throw "Can't move off of map.";
+        if (this._bc_game_state.shadow[this.me.y+dy][this.me.x+dx] === -1) throw "Cannot move outside of vision range.";
+        if (this._bc_game_state.shadow[this.me.y+dy][this.me.x+dx] !== 0) throw "Cannot move onto occupied tile.";
+        if (!this.map[this.me.y+dy][this.me.x+dx]) throw "Cannot move onto impassable terrain.";
+
+        var r = Math.pow(dx,2) + Math.pow(dy,2);  // Squared radius
+        if (r > SPECS.UNITS[this.me.unit]['SPEED']) throw "Slow down, cowboy.  Tried to move faster than unit can.";
+        if (this.fuel < r*SPECS.UNITS[this.me.unit]['FUEL_PER_MOVE']) throw "Not enough fuel to move at given speed.";
+
+        return this._bc_action('move', {
+            dx: dx, dy: dy
+        });
+    }
+
+    mine() {
+        if (this.me.unit !== SPECS.PILGRIM) throw "Only Pilgrims can mine.";
+        if (this.fuel < SPECS.MINE_FUEL_COST) throw "Not enough fuel to mine.";
+        
+        if (this.karbonite_map[this.me.y][this.me.x]) {
+            if (this.me.karbonite >= SPECS.UNITS[SPECS.PILGRIM].KARBONITE_CAPACITY) throw "Cannot mine, as at karbonite capacity.";
+        } else if (this.fuel_map[this.me.y][this.me.x]) {
+            if (this.me.fuel >= SPECS.UNITS[SPECS.PILGRIM].FUEL_CAPACITY) throw "Cannot mine, as at fuel capacity.";
+        } else throw "Cannot mine square without fuel or karbonite.";
+
+        return this._bc_action('mine');
+    }
+
+    give(dx, dy, karbonite, fuel) {
+        if (dx > 1 || dx < -1 || dy > 1 || dy < -1 || (dx === 0 && dy === 0)) throw "Can only give to adjacent squares.";
+        if (!this._bc_check_on_map(this.me.x+dx,this.me.y+dy)) throw "Can't give off of map.";
+        if (this._bc_game_state.shadow[this.me.y+dy][this.me.x+dx] <= 0) throw "Cannot give to empty square.";
+        if (karbonite < 0 || fuel < 0 || this.me.karbonite < karbonite || this.me.fuel < fuel) throw "Do not have specified amount to give.";
+
+        return this._bc_action('give', {
+            dx:dx, dy:dy,
+            give_karbonite:karbonite,
+            give_fuel:fuel
+        });
+    }
+
+    attack(dx, dy) {
+        if (this.me.unit === SPECS.CHURCH) throw "Churches cannot attack.";
+        if (this.fuel < SPECS.UNITS[this.me.unit].ATTACK_FUEL_COST) throw "Not enough fuel to attack.";
+        if (!this._bc_check_on_map(this.me.x+dx,this.me.y+dy)) throw "Can't attack off of map.";
+        if (this._bc_game_state.shadow[this.me.y+dy][this.me.x+dx] === -1) throw "Cannot attack outside of vision range.";
+
+        var r = Math.pow(dx,2) + Math.pow(dy,2);
+        if (r > SPECS.UNITS[this.me.unit]['ATTACK_RADIUS'][1] || r < SPECS.UNITS[this.me.unit]['ATTACK_RADIUS'][0]) throw "Cannot attack outside of attack range.";
+
+        return this._bc_action('attack', {
+            dx:dx, dy:dy
+        });
+        
+    }
+
+
+    // Get robot of a given ID
+    getRobot(id) {
+        if (id <= 0) return null;
+        for (var i=0; i<this._bc_game_state.visible.length; i++) {
+            if (this._bc_game_state.visible[i].id === id) {
+                return insulate(this._bc_game_state.visible[i]);
+            }
+        } return null;
+    }
+
+    // Check if a given robot is visible.
+    isVisible(robot) {
+        return ('unit' in robot);
+    }
+
+    // Check if a given robot is sending you radio.
+    isRadioing(robot) {
+        return robot.signal >= 0;
+    }
+
+    // Get map of visible robot IDs.
+    getVisibleRobotMap() {
+        return this._bc_game_state.shadow;
+    }
+
+    // Get boolean map of passable terrain.
+    getPassableMap() {
+        return this.map;
+    }
+
+    // Get boolean map of karbonite points.
+    getKarboniteMap() {
+        return this.karbonite_map;
+    }
+
+    // Get boolean map of impassable terrain.
+    getFuelMap() {
+        return this.fuel_map;
+    }
+
+    // Get a list of robots visible to you.
+    getVisibleRobots() {
+        return this._bc_game_state.visible;
+    }
+
+    turn() {
+        return null;
+    }
+}
+
+/**
+ * Copyright (c) 2013 Petka Antonov
+ * 
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:</p>
+ * 
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ * 
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ */
+function Deque(capacity) {
+    this._capacity = getCapacity(capacity);
+    this._length = 0;
+    this._front = 0;
+    if (isArray(capacity)) {
+        var len = capacity.length;
+        for (var i = 0; i < len; ++i) {
+            this[i] = capacity[i];
+        }
+        this._length = len;
+    }
+}
+
+Deque.prototype.toArray = function Deque$toArray() {
+    var len = this._length;
+    var ret = new Array(len);
+    var front = this._front;
+    var capacity = this._capacity;
+    for (var j = 0; j < len; ++j) {
+        ret[j] = this[(front + j) & (capacity - 1)];
+    }
+    return ret;
+};
+
+Deque.prototype.push = function Deque$push(item) {
+    var argsLength = arguments.length;
+    var length = this._length;
+    if (argsLength > 1) {
+        var capacity = this._capacity;
+        if (length + argsLength > capacity) {
+            for (var i = 0; i < argsLength; ++i) {
+                this._checkCapacity(length + 1);
+                var j = (this._front + length) & (this._capacity - 1);
+                this[j] = arguments[i];
+                length++;
+                this._length = length;
+            }
+            return length;
+        }
+        else {
+            var j = this._front;
+            for (var i = 0; i < argsLength; ++i) {
+                this[(j + length) & (capacity - 1)] = arguments[i];
+                j++;
+            }
+            this._length = length + argsLength;
+            return length + argsLength;
+        }
+
+    }
+
+    if (argsLength === 0) return length;
+
+    this._checkCapacity(length + 1);
+    var i = (this._front + length) & (this._capacity - 1);
+    this[i] = item;
+    this._length = length + 1;
+    return length + 1;
+};
+
+Deque.prototype.pop = function Deque$pop() {
+    var length = this._length;
+    if (length === 0) {
+        return void 0;
+    }
+    var i = (this._front + length - 1) & (this._capacity - 1);
+    var ret = this[i];
+    this[i] = void 0;
+    this._length = length - 1;
+    return ret;
+};
+
+Deque.prototype.shift = function Deque$shift() {
+    var length = this._length;
+    if (length === 0) {
+        return void 0;
+    }
+    var front = this._front;
+    var ret = this[front];
+    this[front] = void 0;
+    this._front = (front + 1) & (this._capacity - 1);
+    this._length = length - 1;
+    return ret;
+};
+
+Deque.prototype.unshift = function Deque$unshift(item) {
+    var length = this._length;
+    var argsLength = arguments.length;
+
+
+    if (argsLength > 1) {
+        var capacity = this._capacity;
+        if (length + argsLength > capacity) {
+            for (var i = argsLength - 1; i >= 0; i--) {
+                this._checkCapacity(length + 1);
+                var capacity = this._capacity;
+                var j = (((( this._front - 1 ) &
+                    ( capacity - 1) ) ^ capacity ) - capacity );
+                this[j] = arguments[i];
+                length++;
+                this._length = length;
+                this._front = j;
+            }
+            return length;
+        }
+        else {
+            var front = this._front;
+            for (var i = argsLength - 1; i >= 0; i--) {
+                var j = (((( front - 1 ) &
+                    ( capacity - 1) ) ^ capacity ) - capacity );
+                this[j] = arguments[i];
+                front = j;
+            }
+            this._front = front;
+            this._length = length + argsLength;
+            return length + argsLength;
+        }
+    }
+
+    if (argsLength === 0) return length;
+
+    this._checkCapacity(length + 1);
+    var capacity = this._capacity;
+    var i = (((( this._front - 1 ) &
+        ( capacity - 1) ) ^ capacity ) - capacity );
+    this[i] = item;
+    this._length = length + 1;
+    this._front = i;
+    return length + 1;
+};
+
+Deque.prototype.peekBack = function Deque$peekBack() {
+    var length = this._length;
+    if (length === 0) {
+        return void 0;
+    }
+    var index = (this._front + length - 1) & (this._capacity - 1);
+    return this[index];
+};
+
+Deque.prototype.peekFront = function Deque$peekFront() {
+    if (this._length === 0) {
+        return void 0;
+    }
+    return this[this._front];
+};
+
+Deque.prototype.get = function Deque$get(index) {
+    var i = index;
+    if ((i !== (i | 0))) {
+        return void 0;
+    }
+    var len = this._length;
+    if (i < 0) {
+        i = i + len;
+    }
+    if (i < 0 || i >= len) {
+        return void 0;
+    }
+    return this[(this._front + i) & (this._capacity - 1)];
+};
+
+Deque.prototype.isEmpty = function Deque$isEmpty() {
+    return this._length === 0;
+};
+
+Deque.prototype.clear = function Deque$clear() {
+    var len = this._length;
+    var front = this._front;
+    var capacity = this._capacity;
+    for (var j = 0; j < len; ++j) {
+        this[(front + j) & (capacity - 1)] = void 0;
+    }
+    this._length = 0;
+    this._front = 0;
+};
+
+Deque.prototype.toString = function Deque$toString() {
+    return this.toArray().toString();
+};
+
+Deque.prototype.valueOf = Deque.prototype.toString;
+Deque.prototype.removeFront = Deque.prototype.shift;
+Deque.prototype.removeBack = Deque.prototype.pop;
+Deque.prototype.insertFront = Deque.prototype.unshift;
+Deque.prototype.insertBack = Deque.prototype.push;
+Deque.prototype.enqueue = Deque.prototype.push;
+Deque.prototype.dequeue = Deque.prototype.shift;
+Deque.prototype.toJSON = Deque.prototype.toArray;
+
+Object.defineProperty(Deque.prototype, "length", {
+    get: function() {
+        return this._length;
+    },
+    set: function() {
+        throw new RangeError("");
+    }
+});
+
+Deque.prototype._checkCapacity = function Deque$_checkCapacity(size) {
+    if (this._capacity < size) {
+        this._resizeTo(getCapacity(this._capacity * 1.5 + 16));
+    }
+};
+
+Deque.prototype._resizeTo = function Deque$_resizeTo(capacity) {
+    var oldCapacity = this._capacity;
+    this._capacity = capacity;
+    var front = this._front;
+    var length = this._length;
+    if (front + length > oldCapacity) {
+        var moveItemsCount = (front + length) & (oldCapacity - 1);
+        arrayMove(this, 0, this, oldCapacity, moveItemsCount);
+    }
+};
+
+
+var isArray = Array.isArray;
+
+function arrayMove(src, srcIndex, dst, dstIndex, len) {
+    for (var j = 0; j < len; ++j) {
+        dst[j + dstIndex] = src[j + srcIndex];
+        src[j + srcIndex] = void 0;
+    }
+}
+
+function pow2AtLeast(n) {
+    n = n >>> 0;
+    n = n - 1;
+    n = n | (n >> 1);
+    n = n | (n >> 2);
+    n = n | (n >> 4);
+    n = n | (n >> 8);
+    n = n | (n >> 16);
+    return n + 1;
+}
+
+function getCapacity(capacity) {
+    if (typeof capacity !== "number") {
+        if (isArray(capacity)) {
+            capacity = capacity.length;
+        }
+        else {
+            return 16;
+        }
+    }
+    return pow2AtLeast(
+        Math.min(
+            Math.max(16, capacity), 1073741824)
+    );
+}
+
+// module.exports = Deque;
+
 // import { Queue } from './Queue.src.js';
-import { Deque } from './FastQueue.js';
+
+function addPair(a, b) {
+    return {
+        x: a.x + b.x,
+        y: a.y + b.y
+    };
+}
+
+function subtractPair(a, b) {
+    return {
+        x: a.x - b.x,
+        y: a.y - b.y
+    };
+}
+
+function sqDist(a, b) {
+    return (a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y);
+}
+
+function pairEq(a, b) {
+    return a.x === b.x && a.y === b.y;
+}
+
+function pairToString(p) {
+    return "(" + p.x + ", " + p.y + ")";
+}
+
+function inGrid(pos, length) {
+    return pos.x >= 0 && pos.y >= 0 && pos.x < length && pos.y < length;
+}
+
+function empty(loc, map, robotMap = null) {
+    return inGrid(loc, map.length) && map[loc.y][loc.x] && (robotMap === null || robotMap[loc.y][loc.x] <= 0);
+}
+
+// TODO: when stuck, perform full bfs treating robot positions as fixed
+function bfs(start, map) {
+    let q = new Deque(512);
+    let visited = new Array(map.length);
+    let dist = new Array(map.length);
+    for (let i = 0; i < map.length; i++) {
+        visited[i] = new Array(map.length).fill(false);
+        dist[i] = new Array(map.length).fill(1000000);
+    }
+    q.push(start);
+    visited[start.y][start.x] = true;
+    dist[start.y][start.x] = 0;
+    while (!q.isEmpty()) {
+        let v = q.shift();
+        let adj = [[1, 0], [0, 1], [-1, 0], [0, -1]];
+        for (let i = 0; i < 4; i++) {
+            let u = { x: v.x + adj[i][0], y: v.y + adj[i][1] };
+            if (empty(u, map) && !visited[u.y][u.x]) {
+                q.push(u);
+                visited[u.y][u.x] = true;
+                dist[u.y][u.x] = dist[v.y][v.x] + 1;
+            }
+        }
+    }
+    return dist;
+}
+
+function fullBFS(start, map, speed, beside = false) {
+    let q = new Deque(512);
+    let visited = new Array(map.length);
+    let dist = new Array(map.length);
+    for (let i = 0; i < map.length; i++) {
+        visited[i] = new Array(map.length).fill(false);
+        dist[i] = new Array(map.length).fill(1000000);
+    }
+    if (beside) {
+        for (let dx = -1; dx <= 1; dx++) {
+            for (let dy = -1; dy <= 1; dy++) {
+                if (dx === 0 && dy === 0)
+                    continue;
+                let pos = { x: start.x + dx, y: start.y + dy };
+                if (empty(pos, map)) {
+                    q.push(pos);
+                    visited[pos.y][pos.x] = true;
+                    dist[pos.y][pos.x] = 0;
+                }
+            }
+        }
+    }
+    else {
+        q.push(start);
+        visited[start.y][start.x] = true;
+        dist[start.y][start.x] = 0;
+    }
+    let s = Math.floor(Math.sqrt(speed));
+    let shifts = [];
+    for (let dx = -s; dx <= s; dx++) {
+        for (let dy = -s; dy <= s; dy++) {
+            let shift = { x: dx, y: dy };
+            if (norm(shift) <= speed) {
+                shifts.push(shift);
+            }
+        }
+    }
+    while (!q.isEmpty()) {
+        let v = q.shift();
+        for (let i = 0; i < shifts.length; i++) {
+            let u = addPair(v, shifts[i]);
+            if (empty(u, map) && !visited[u.y][u.x]) {
+                q.push(u);
+                visited[u.y][u.x] = true;
+                dist[u.y][u.x] = dist[v.y][v.x] + 1;
+            }
+        }
+    }
+    return dist;
+}
+
+function move(loc, bfsGrid, map, robots, speed, forceMove = false) {
+    let minDist = 1000000;
+    let minCost = 1000000;
+    let bestMove = { x: -100, y: -100 };
+    for (let dx = -3; dx <= 3; dx++) {
+        for (let dy = -3; dy <= 3; dy++) {
+            let next = { x: loc.x + dx, y: loc.y + dy };
+            if (sqDist(loc, next) <= speed && (empty(next, map, robots) || (dx === 0 && dy === 0 && !forceMove))) {
+                // prioritize fast over cost
+                if (bfsGrid[next.y][next.x] < minDist || (bfsGrid[next.y][next.x] === minDist && sqDist(loc, next) < minCost)) {
+                    minDist = bfsGrid[next.y][next.x];
+                    minCost = sqDist(loc, next);
+                    bestMove = { x: dx, y: dy };
+                }
+            }
+        }
+    }
+    return bestMove;
+}
+
+function norm(v) {
+    return v.x * v.x + v.y * v.y;
+}
+
+const shifts = [
+    { x: -1, y: -1 },
+    { x: -1, y: 0 },
+    { x: -1, y: 1 },
+    { x: 0, y: -1 },
+    { x: 0, y: 1 },
+    { x: 1, y: -1 },
+    { x: 1, y: 0 },
+    { x: 1, y: 1 }
+];
+
+function hashShift(shift) {
+    for (let i = 0; i < 8; i++) {
+        if (pairEq(shifts[i], shift)) {
+            return i;
+        }
+    }
+}
+
+function unhashShift(hash) {
+    return shifts[hash];
+}
+
+// for sorting targetKarb and targetFuel
+function customSort(a, b) {
+    if (a.dist !== b.dist)
+        return a.dist - b.dist;
+    else if (a.assignedCastle !== b.assignedCastle)
+        return a.assignedCastle - b.assignedCastle;
+    else if (a.pos.x !== b.pos.x)
+        return a.pos.x - b.pos.x;
+    else
+        return a.pos.y - b.pos.y;
+}
+
+function compareDist(a, b) {
+    if (norm(a.relPos) !== norm(b.relPos))
+        return a.relPos - b.relPos;
+    else
+        return b.unitType - a.unitType;
+}
+
+function copyPair(p) {
+    return { x: p.x, y: p.y };
+}
+
+// export default { addPair, sqDist, findClosestKarbonite, findClosestFuel, findClosestPosition };
 
 // 3 castle test seed: 1505486586
 // times out: 1909424986 (pilgrim bfs)
@@ -420,7 +1129,7 @@ class MyRobot extends BCAbstractRobot {
                 return this.buildUnit(SPECS.PILGRIM, bestShift.x, bestShift.y);
             }
         }
-        this.log("ERROR! Tried to build karb pilgrim when desired number is already reached")
+        this.log("ERROR! Tried to build karb pilgrim when desired number is already reached");
     }
 
     // TODO: if new unit gets killed when assignedWorker = 0, need to replace 
@@ -447,12 +1156,6 @@ class MyRobot extends BCAbstractRobot {
                                 minDist = sqDist(pos, destination);
                                 bestPos = pos;
                             }
-                            else {
-                                // this.log("Failed because " + pairToString(pos) + " is farther than the min distance of " + minDist);
-                            }
-                        }
-                        else {
-                            // this.log("Failed because " + pairToString(pos) + " is occupied");
                         }
                     }
                 }
@@ -1152,36 +1855,38 @@ class MyRobot extends BCAbstractRobot {
         else { // other attacking unit
             this.loc = { x: this.me.x, y: this.me.y };
 
-            var self = this // 'this' fails to properly identify MyRobot when used inside of anonymous function below :(
+            var self = this; // 'this' fails to properly identify MyRobot when used inside of anonymous function below :(
 
             // get attackable robots
             var attackable = visible.filter((r) => {
                 if (!self.isVisible(r)) {
                     return false
                 }
-                var dist = (r.x - self.me.x) ** 2 + (r.y - self.me.y) ** 2
+                var dist = (r.x - self.me.x) ** 2 + (r.y - self.me.y) ** 2;
                 if (r.team !== self.me.team
                     && SPECS.UNITS[SPECS.CRUSADER].ATTACK_RADIUS[0] <= dist
                     && dist <= SPECS.UNITS[SPECS.CRUSADER].ATTACK_RADIUS[1]) {
                     return true
                 }
                 return false
-            })
+            });
             // this.log(attackable)
 
             if (attackable.length > 0) {
                 // attack first robot
-                var r = attackable[0]
-                this.log("" + r)
-                this.log('attacking! ' + r + ' at loc ' + (r.x - this.me.x, r.y - this.me.y))
+                var r = attackable[0];
+                this.log("" + r);
+                this.log('attacking! ' + r + ' at loc ' + (r.x - this.me.x, r.y - this.me.y));
                 return this.attack(r.x - this.me.x, r.y - this.me.y)
             }
 
             const choices = [[0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1]];
-            const choice = choices[Math.floor(Math.random() * choices.length)]
+            const choice = choices[Math.floor(Math.random() * choices.length)];
             return this.move(...choice);
         }
     }
 }
+
+var robot = new MyRobot();
 
 var robot = new MyRobot();

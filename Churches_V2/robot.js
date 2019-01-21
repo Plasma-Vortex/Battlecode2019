@@ -7,6 +7,12 @@ import crusader from './crusader.js';
 import prophet from './prophet.js';
 import preacher from './preacher.js';
 
+// clear && bc19compile -d Churches_V2 -o debug.js -f && bc19run --bc debug.js --rc debug.js
+// 3 castle test seed: 1505486586
+// times out: 1909424986 (pilgrim bfs)
+// only makes two pilgrims: 1298989386. Distance of mines from you and enemy are equal because pilgrim jump is ignored.
+// Good eco teams: big red battlecode, oak's last disciple, vvvvv, knights of cowmelot, deus vult, panda lovers
+
 class MyRobot extends BCAbstractRobot {
     constructor() {
         super();

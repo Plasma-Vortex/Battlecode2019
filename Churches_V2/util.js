@@ -165,6 +165,54 @@ util.findEnemies = (self, visible) => {
     return enemyUnits;
 }
 
+util.L1Norm = (a, b) => {
+    return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
+}
+
+util.dfs = (adj, v, visited) => {
+    visited[v] = true;
+    for (let i = 0; i < adj[v].length; i++) {
+        if (!visited[adj[v][i]]) {
+            util.dfs(adj[v][i]);
+        }
+    }
+}
+
+util.getConnectedComponents = (adj, v) => {
+    let visited = new Array(adj.length).fill(false);
+    util.dfs(adj, v, visited);
+    let connectedComponents = [];
+    for (let i = 0; i < adj.length; i++) {
+        if (visited[i]) {
+            connectedComponents.push(i);
+        }
+    }
+    return connectedComponents;
+}
+
+util.removeEdge = (adj, cc) => {
+    bestPair = [-1, -1];
+    maxMissing = -1;
+    for (let v = 0; v<cc.length; v++){
+        for (let i = 0; i<adj[v].length; i++){
+            let u = adj[v][i];
+            // consider edge v, u
+            let missing = 0;
+            for (let j=0; j<adj[v].length; j++) {
+                if (!adj[u].includes(adj[v][j]))
+                    missing++;
+            }
+            for (let j=0; j<adj[u].length; j++) {
+                if (!adj[v].includes(adj[u][j]))
+                    missing++;
+            }
+            if (missing > maxMissing){
+                bestPair = [v, u];
+            }
+        }
+    }
+    return bestPair;
+}
 
 export default util;
 

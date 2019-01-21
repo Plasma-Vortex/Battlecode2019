@@ -124,4 +124,69 @@ resource.canMaintainBuffer = (self, unitType) => {
         && self.fuel - SPECS.UNITS[unitType].CONSTRUCTION_FUEL >= self.fuelBuffer);
 }
 
+resource.initFullResourceList = (self) => {
+    self.allResources = [];
+    for (let x = 0; x < self.map.length; x++) {
+        for (let y = 0; y < self.map.length; y++) {
+            if (self.karbonite_map[y][x])
+                self.allResources.push({ type: 0, pos: { x: x, y: y } });
+            else if (self.fuel_map[y][x])
+                self.allResources.push({ type: 1, pos: { x: x, y: y } });
+        }
+    }
+}
+
+resource.splitIntoClusters = (self) => {
+    self.resourceGraph = [];
+    for (let i = 0; i < self.allResources.length; i++) {
+        for (let j = i + 1; j < self.allResources.length; i++) {
+            if (util.L1Norm(self.allResources[i].pos, self.allResources[j].pos) <= 8) {
+                self.resourceGraph[i].push(j);
+                self.resourceGraph[j].push(i);
+            }
+        }
+    }
+    let allCliques = false;
+    let inClique = new Array(self.allResources.length).fill(false);
+    self.clusters = [];
+    while (!allCliques) {
+        let changed = false;
+        for (let i = 0; i < self.allResources.length; i++) {
+            if (inClique[i])
+                continue;
+            let connectedComponent = util.getConnectedComponents(self.resourceGraph, i);
+            let thisIsClique = true;
+            for (let j = 0; j < connectedComponent.length; j++) {
+                if (self.resourceGraph[j].length !== connectedComponent.length - 1) {
+                    thisIsClique = false;
+                    let edge = util.removeEdge(self.resourceGraph, connectedComponent);
+                    self.log("Removing edge " + edge[0] + " - " + edge[1]);
+                    adj[edge[0]].splice(adj[edge[0]].indexOf(edge[1]), 1); // TODO: move into removeEdge function if logging is not needed
+                    adj[edge[1]].splice(adj[edge[1]].indexOf(edge[0]), 1);
+                    changed = true;
+                    break;
+                }
+            }
+            if (thisIsClique) {
+                for (let j = 0; j < connectedComponent.length; j++) {
+                    inClique[connectecComponent[j]] = true;
+                }
+                self.clusters.push({ mines: connectedComponent, hasCastle: false, church: { x: -1, y: -1 } });
+            }
+            if (changed)
+                break;
+        }
+        allCliques = true;
+        for (let i = 0; i < self.inClique.length; i++) {
+            if (!self.inClique[i])
+                allCliques = false;
+        }
+    }
+    return self.clusters;
+}
+
+resource.findCastleClusters = (self) => {
+    for (let )
+}
+
 export default resource;
