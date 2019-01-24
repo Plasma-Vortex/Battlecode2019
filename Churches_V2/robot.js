@@ -13,6 +13,10 @@ import preacher from './preacher.js';
 // only makes two pilgrims: 1298989386. Distance of mines from you and enemy are equal because pilgrim jump is ignored.
 // Good eco teams: big red battlecode, oak's last disciple, vvvvv, knights of cowmelot, deus vult, panda lovers
 
+// TODO: replace array.push with array[i] = x to optimize code
+// clique with one resource: 1482125857
+// remove edge (-1, -1): 1482125857
+
 class MyRobot extends BCAbstractRobot {
     constructor() {
         super();
@@ -25,7 +29,7 @@ class MyRobot extends BCAbstractRobot {
         this.log("Time remaining: " + this.me.time);
         this.visible = this.getVisibleRobots();
         this.robotMap = this.getVisibleRobotMap();
-        this.alreadySignaled = false;
+        this.alreadySignalled = false;
         this.loc = { x: this.me.x, y: this.me.y };
 
         if (this.type === undefined) {

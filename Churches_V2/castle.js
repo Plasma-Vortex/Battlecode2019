@@ -38,10 +38,14 @@ castle.takeTurn = (self) => {
         self.castlePos[self.castleNumber] = { x: self.me.x, y: self.me.y };
         self.castleTalk(((self.castleNumber + 1) << 6) + self.me.x);
 
+        self.unitInfo = [];
+        for (let i = 0; i <= 4096; i++) {
+            self.unitInfo.push({ type: -1, info: -1 });
+        }
         // other init things
-        self.lastCreated = null;
-        self.prioritySignalQueue = new Deque();
-        self.signalQueue = new Deque();
+        // self.lastCreated = null;
+        // self.prioritySignalQueue = new Deque();
+        // self.signalQueue = new Deque();
         return;
     }
     else if (self.me.turn === 2) {
@@ -90,81 +94,95 @@ castle.takeTurn = (self) => {
             self.enemyCastlePos.push(util.reflect(self, self.castlePos[i]));
         }
 
-        self.maxKarbPilgrims = 16;
-        self.maxFuelPilgrims = 16;
+        castleUtil.initAvoidMinesMap(self);
+        resource.mainInit(self);
+        for (let i = 0; i < self.clusters.length; i++) {
+            if (self.clusters[i].castle === self.castleNumber + 1) {
+                self.myCluster = i;
+            }
+        }
+        castleUtil.initClusterProgress(self);
 
-        self.assignedArea = resource.assignAreaToCastles(self);
-        resource.initResourceList(self);
+        // self.castles already exists
+        // self.churches = [];
+        // self.pilgrims = [];
+        // self.crusaders = [];
+        // self.prophets = []; // rangers
+        // self.preachers = []; // mages/tanks
 
-        // self.log("Target karb:");
-        // for (let i = 0; i<self.targetKarb.length; i++){
-        //     self.log(JSON.stringify(self.targetKarb[i]));
-        // }
-        // self.log("Target fuel:");
-        // for (let i = 0; i<self.targetFuel.length; i++){
-        //     self.log(JSON.stringify(self.targetFuel[i]));
-        // }
-
-        self.churches = [];
-        self.karbPilgrims = [];
-        self.fuelPilgrims = [];
-        self.crusaders = [];
-        self.prophets = []; // rangers
-        self.preachers = []; // mages/tanks
-
-        self.desiredKarbPilgrims = Math.min(4, self.targetKarb.length);
-        self.desiredFuelPilgrims = Math.min(4, self.targetFuel.length);
         self.karbBuffer = 60; // TODO: make it dynamic
         self.fuelBuffer = 300; // TODO: make it dynamic
     }
 
-    castleUtil.updateAllUnitLists(self, self.visible);
+    castleUtil.updateUnitInfo(self, self.visible); // add updates to clusterProgress
 
-    let karbGoal = resource.karbGoalStatus(self, self.desiredKarbPilgrims);
-    let fuelGoal = resource.fuelGoalStatus(self, self.desiredFuelPilgrims);
     let visibleEnemies = util.findEnemies(self, self.visible);
-    // self.log("Karb goal: " + JSON.stringify(karbGoal));
-    // self.log("Fuel goal: " + JSON.stringify(fuelGoal));
-
-    self.log(visibleEnemies);
+    let targetCluster = castleUtil.getTargetCluster(self);
 
     if (util.hasSpaceAround(self)) {
-        if (visibleEnemies.length > 0) {
+        if (visibleEnemies.length > 0) { // change to if any cluster is under attack
             self.log("Under attack!");
             visibleEnemies.sort(compareDist);
             if (util.canBuild(self, SPECS.PREACHER)) {
                 return self.buildDefenseMage(visibleEnemies[0]);
             }
         }
-        else if (!karbGoal.reached) {
-            if (karbGoal.canHelp && resource.canMaintainBuffer(self, SPECS.PILGRIM)) {
-                return castleUtil.buildKarbPilgrim(self);
+        else if (targetCluster === self.myCluster) {
+            if (self.clusterProgress[self.myCluster].karbPilgrims < self.clusters[self.myCluster].karb.length) {
+                // build more karb pilgrims
+                if (resource.canMaintainBuffer(self, SPECS.PILGRIM)) {
+                    return castleUtil.buildKarbPilgrim(self); // add way to properly choose mine for pilgrim
+                }
+                else {
+                    // build up more resources before expanding, to maintain buffer
+                    self.log("Saving for karb pilgrim");
+                    signalling.sendSignal(self);
+                    return;
+                }
+            }
+            else if (self.clusterProgress[self.myCluster].fuelPilgrims < self.clusters[self.myCluster].fuel.length) {
+                if (resource.canMaintainBuffer(self, SPECS.PILGRIM)) {
+                    return castleUtil.buildFuelPilgrim(self);
+                }
+                else {
+                    // build up more resources before expanding, to maintain buffer
+                    self.log("Saving for fuel pilgrim");
+                    signalling.sendSignal(self);
+                    return;
+                }
+            } // neededDefenseProphets should take turn number (and previous enemy attacks?) into account
+            else if (self.clusterProgress[self.myCluster].prophets.length < castleUtil.neededDefenseProphets(self)) {
+                if (resource.canMaintainBuffer(self, SPECS.PROPHET)) {
+                    self.log("Should have built defense prophet");
+                    // return castleUtil.buildDefenseProphet(self);
+                }
+                else {
+                    // build up more resources before expanding, to maintain buffer
+                    self.log("Saving for defense mage");
+                    signalling.sendSignal(self);
+                    return;
+                }
             }
             else {
-                // wait for other castle to do it, if !canHelp
-                // or if it's my job, prioritize safety buffer
+                self.log("ERROR! my cluster already has all karb pilgrims, fuel pilgrims, and prophets needed");
                 signalling.sendSignal(self);
                 return;
             }
         }
-        else if (!fuelGoal.reached) {
-            if (fuelGoal.canHelp && resource.canMaintainBuffer(self, SPECS.PILGRIM)) {
-                return castleUtil.buildFuelPilgrim(self);
+        else if (targetCluster !== -1) {
+            // cluster mines are fully occupied by pilgrims and has enough defense. Time to expand
+            if (self.clusterProgress[targetCluster].church === 0) {
+                return castleUtil.buildChurchPilgrim(self, targetCluster);
+            }
+            else if (self.clusterProgress[targetCluster].church === -1) {
+                // save up units for attack
             }
             else {
-                // wait for other castle to do it, if !canHelp
-                // or if it's my job, prioritize safety buffer
-                signalling.sendSignal(self);
-                return;
+                self.log("ERROR! target cluster's church status is neither 0 not 1");
             }
         }
-        // else if (self.canMaintainBuffer(SPECS.CRUSADER)) {
-        //     self.log("Building crusader");
-        //     self.sendSignal();
-        //     return self.buildAround(SPECS.CRUSADER);
-        // }
         else {
-            self.lastCreated = null;
+            self.log("Waiting for other castles to finish their cluster or build new churches");
         }
     }
     // self.log("Current number of karb pilgrims: " + self.karbPilgrims.length);

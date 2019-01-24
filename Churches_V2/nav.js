@@ -10,8 +10,8 @@ nav.bfs = (start, map) => {
     let visited = new Array(map.length);
     let dist = new Array(map.length);
     for (let i = 0; i < map.length; i++) {
-        visited[i] = new Array(map.length).fill(false);
-        dist[i] = new Array(map.length).fill(1000000);
+        visited[i] = new Array(map[0].length).fill(false);
+        dist[i] = new Array(map[0].length).fill(1000000);
     }
     q.push(start);
     visited[start.y][start.x] = true;
@@ -36,8 +36,8 @@ nav.fullBFS = (start, map, speed, beside = false) => {
     let visited = new Array(map.length);
     let dist = new Array(map.length);
     for (let i = 0; i < map.length; i++) {
-        visited[i] = new Array(map.length).fill(false);
-        dist[i] = new Array(map.length).fill(1000000);
+        visited[i] = new Array(map[0].length).fill(false);
+        dist[i] = new Array(map[0].length).fill(1000000);
     }
     if (beside) {
         for (let dx = -1; dx <= 1; dx++) {

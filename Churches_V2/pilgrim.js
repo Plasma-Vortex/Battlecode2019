@@ -2,6 +2,8 @@ import { BCAbstractRobot, SPECS } from 'battlecode';
 import nav from './nav.js';
 import util from './util.js';
 import pilgrimUtil from './pilgrimUtil.js';
+import resource from './resource.js';
+import signalling from './signalling.js';
 
 const pilgrim = {};
 
@@ -11,110 +13,120 @@ pilgrim.takeTurn = (self) => {
     self.log("I have " + self.me.karbonite + " karb and " + self.me.fuel + " fuel");
 
     if (self.me.turn === 1) {
-        self.receivedFirstMessage = false;
-        self.state = "waiting for init messages";
+        resource.mainInit(self);
+        self.foundCastles = [];
+        self.foundChurches = [];
+        self.foundEnemyCastles = [];
+        self.foundEnemyChurches = [];
+        // self.baseInitialized = false;
     }
 
-    if (self.state === "waiting for init messages") {
-        self.log("Pilgrim state: " + self.state);
+    pilgrimUtil.searchCastlesOrChurches(self);
+
+    if (self.me.turn === 1) {
         let receivedMessage = false;
         for (let i = 0; i < self.visible.length; i++) {
             let r = self.visible[i];
-            if (r.team === self.me.team && r.unit === SPECS.CASTLE && self.isRadioing(r)) {
-                let hash = r.signal;
-                if (hash >> 15) {
-                    let shiftHash = (hash >> 12) & ((1 << 3) - 1);
-                    let shift = util.unhashShift(shiftHash);
-                    if (util.pairEq(util.subtractPair(self.loc, { x: r.x, y: r.y }), shift)) {
-                        // signal is meant for me!
-                        self.log("I got a message!");
-                        receivedMessage = true;
-                        if (!self.receivedFirstMessage) {
-                            self.log("self is my first message");
-                            self.receivedFirstMessage = true;
+            if (r.team === self.me.team
+                && (r.unit === SPECS.CASTLE || r.unit === SPECS.CHURCH)
+                && self.isRadioing(r) && (r.signal >> 15)
+                && util.sqDist(self.loc, { x: r.x, y: r.y })) {
+                // signal is meant for me!
+                self.log("I got a message!");
+                receivedMessage = true;
 
-                            self.castles = new Array((hash >> 10) & ((1 << 2) - 1));
-                            self.castlePos = new Array(self.castles.length);
-                            self.baseCastleNumber = ((hash >> 8) & ((1 << 2) - 1)) - 1;
-                            self.castles[self.baseCastleNumber] = r.id;
-                            self.castlePos[self.baseCastleNumber] = { x: r.x, y: r.y };
-
-                            self.log("Known castle locations:");
-                            self.log(self.castlePos);
-
-                            self.base = { x: r.x, y: r.y };
-                            self.churches = new Array((hash >> 6) & ((1 << 2) - 1)); // TODO: don't send church info
-                            if (hash & (1 << 4))
-                                self.targetResource = "fuel";
-                            else
-                                self.targetResource = "karb";
-                            self.targetID = hash & ((1 << 4) - 1);
-
-                            // let other castles know that you're a newly created robot
-                            // 7th bit shows that you're new, 5-6 shows your type, 0-4 shows your job
-                            self.castleTalk((1 << 7) | ((self.me.unit - 2) << 5) | (hash & ((1 << 5) - 1)));
-
-                            if (self.castles.length === 1) {
-                                pilgrimUtil.pilgrimInit(self);
-                                self.state = "going to mine"; // can start moving on the same turn
-                            }
-                            else {
-                                self.log("Must wait for more init messages");
-                                return pilgrimUtil.pilgrimDontDoNothing(self);
-                            }
-                        }
-                        else {
-                            for (let j = 0; j < self.castles.length; j++) {
-                                if (self.castles[j] === undefined) {
-                                    self.castles[j] = r.id;
-                                    self.castlePos[j] = { x: (r.signal >> 6) & ((1 << 6) - 1), y: r.signal & ((1 << 6) - 1) };
-                                    break;
-                                }
-                            }
-                            self.log("Known castle locations:");
-                            self.log(self.castlePos);
-
-                            for (let j = 0; j < self.castles.length; j++) {
-                                if (self.castles[j] === undefined) {
-                                    self.log("Must wait for more init messages");
-                                    return pilgrimUtil.pilgrimDontDoNothing(self);
-                                }
-                            }
-                            pilgrimUtil.pilgrimInit(self);
-                            self.state = "going to mine"; // can start moving on the same turn
-                        }
-                    }
+                let message = r.signal - (1 << 15);
+                if (message < self.allResources.length) { // resource pilgrim
+                    self.targetMineID = message;
+                    self.targetResource = self.allResources[self.targetMineID].type;
+                    self.targetMinePos = self.allResources[message].pos;
+                    self.myClusterID = self.allResources[message].cluster;
+                    self.base = { x: r.x, y: r.y };
+                    self.state = "going to mine";
                 }
+                else {
+                    self.myClusterID = message - self.allResources.length;
+                    self.targetMineID = self.clusters[self.myClusterID].karb[0];
+                    self.targetResource = 0;
+                    self.targetMinePos = self.allResources[self.targetMineID].pos;
+                    self.base = self.clusters[self.myClusterID].churchPos;
+                    self.state = "going to build church";
+                }
+                self.castleTalk(message);
+                util.findSymmetry(self); // why does the pilgrim need this?
+                pilgrimUtil.initAvoidMinesMap(self);
+                self.bfsFromMine = nav.fullBFS(self.targetMinePos, self.avoidMinesMap, SPECS.UNITS[self.me.unit].SPEED);
+                self.bfsFromBase = nav.fullBFS(self.base, self.avoidMinesMap, SPECS.UNITS[self.me.unit].SPEED, true);
+                self.log("I am a pilgrim that just got initialized");
+                self.log("Target Resource: " + self.targetResource);
+                self.log("Base castle or church: " + util.pairToString(self.base));
+                self.log("Target Mine: " + util.pairToString(self.targetMinePos));
             }
         }
         if (!receivedMessage) {
-            self.log("No message received, state is still " + self.state);
-            return pilgrimUtil.pilgrimDontDoNothing(self);
+            self.log("ERROR! I'm a new pilgrim that didn't get an init message");
+        }
+    }
+
+    if (self.state === "going to build church") {
+        self.log("Pilgrim state: " + self.state);
+        if (util.sqDist(self.loc, self.base) <= 2) {
+            self.state = "building church";
+            self.log("Already arrived at build location, state switching to " + self.state);
+        }
+        else {
+            let chosenMove = nav.move(self.loc, self.bfsFromBase, self.map, self.robotMap, SPECS.UNITS[self.me.unit].SPEED);
+            self.log("Move: " + util.pairToString(chosenMove));
+            if (util.pairEq(chosenMove, { x: 0, y: 0 })) {
+                // TODO: find solution
+                self.log("New move: " + util.pairToString(chosenMove));
+                if (util.pairEq(chosenMove, { x: 0, y: 0 })) {
+                    // TODO: pilgrim is stuck, turn stationary robots into impassable
+                    return pilgrimUtil.pilgrimDontDoNothing(self);
+                }
+            }
+            if (util.sqDist(util.addPair(self.loc, chosenMove), self.base) <= 2 && util.enoughFuelToMove(self, chosenMove)) {
+                self.state = "building church";
+                self.log("Will arrive at build location next turn, state switching to " + self.state);
+            }
+            return self.move(chosenMove.x, chosenMove.y);
+        }
+    }
+
+    if (self.state === "building church") { // combine with above state?
+        if (util.sqDist(self.loc, self.base) > 2) {
+            self.log("ERROR! state is " + self.state + " but not currently adjacent to build location");
+            self.state = "going to mine";
+            // TODO: set mine as closest karb
+        }
+        else {
+            self.log("Building church at " + util.pairToString(self.base));
+            let shift = util.subtractPair(self.base, self.loc);
+            signalling.pilgrimToNewChurch(self, self.targetResource, shift);
+            self.state = "going to mine";
+            return self.buildUnit(SPECS.CHURCH, shift.x, shift.y);
         }
     }
 
     if (self.state === "going to mine") {
         self.log("Pilgrim state: " + self.state);
-        if (util.pairEq(self.loc, self.targetMine)) {
+        if (util.pairEq(self.loc, self.targetMinePos)) {
             self.state = "mining"; // can start mining on the same turn
             self.log("Already arrived at mine, state changed to " + self.state);
         }
         else {
-            // let chosenMove = move(self.loc, self.bfsFromMine, self.map, self.getVisibleRobotMap(), SPECS.UNITS[self.me.unit].SPEED);
-            let chosenMove = nav.move(self.loc, self.avoidMinesResourceBFS, self.map, self.robotMap, SPECS.UNITS[self.me.unit].SPEED);
+            let chosenMove = nav.move(self.loc, self.bfsFromMine, self.map, self.robotMap, SPECS.UNITS[self.me.unit].SPEED);
             self.log("Move: " + util.pairToString(chosenMove));
             if (util.pairEq(chosenMove, { x: 0, y: 0 })) {
-                // chosenMove = move(self.loc, self.bfsFromMine, self.map, self.getVisibleRobotMap(), SPECS.UNITS[self.me.unit].SPEED);
+                // TODO: alternate move
                 self.log("New move: " + util.pairToString(chosenMove));
                 if (util.pairEq(chosenMove, { x: 0, y: 0 })) {
-                    // self.lastMoveNothing = true; // stuck
                     // TODO: signal when stuck
                     return pilgrimUtil.pilgrimDontDoNothing(self);
                 }
             }
-            // self.lastMoveNothing = false;
             // TODO: make pilgrims follow fuel buffer
-            if (util.pairEq(util.addPair(self.loc, chosenMove), self.targetMine)
+            if (util.pairEq(util.addPair(self.loc, chosenMove), self.targetMinePos)
                 && util.enoughFuelToMove(self, chosenMove))
                 self.state = "mining";
             return self.move(chosenMove.x, chosenMove.y);
@@ -125,7 +137,7 @@ pilgrim.takeTurn = (self) => {
         self.log("Pilgrim state: " + self.state);
         if (self.fuel >= SPECS.MINE_FUEL_COST) {
             // self.lastMoveNothing = false;
-            if (self.targetResource === "karb") {
+            if (self.targetResource === 0) { // karb
                 if (self.me.karbonite + SPECS.KARBONITE_YIELD >= SPECS.UNITS[self.me.unit].KARBONITE_CAPACITY) {
                     self.log("Storage will be full next round, swiching state to go to base");
                     self.state = "going to base";
@@ -148,24 +160,38 @@ pilgrim.takeTurn = (self) => {
     }
 
     if (self.state === "going to base") {
+        // if (!self.baseInitialized) {
+        //     let minDist = 1000000;
+        //     for (let i = 0; i < self.foundCastles.length; i++) {
+        //         if (util.sqDist(self.foundCastles[i], self.targetMinePos) < minDist) {
+        //             minDist = util.sqDist(self.foundCastles[i], self.targetMinePos);
+        //             self.base = self.foundCastles[i];
+        //         }
+        //     }
+        //     for (let i = 0; i < self.foundChurches.length; i++) {
+        //         if (util.sqDist(self.foundChurches[i], self.targetMinePos) < minDist) {
+        //             minDist = util.sqDist(self.foundChurches[i], self.targetMinePos);
+        //             self.base = self.foundChurches[i];
+        //         }
+        //     }
+        //     self.baseInitialized = true;
+        // }
         self.log("Pilgrim state: " + self.state);
         if (util.sqDist(self.loc, self.base) <= 2) {
             self.state = "depositing";
             self.log("Already arrived at base, state switching to " + self.state);
         }
         else {
-            let chosenMove = nav.move(self.loc, self.avoidMinesBaseBFS, self.map, self.robotMap, SPECS.UNITS[self.me.unit].SPEED);
-            // let chosenMove = move(self.loc, self.bfsFromBase, self.map, self.getVisibleRobotMap(), SPECS.UNITS[self.me.unit].SPEED, self.lastMoveNothing);
+            let chosenMove = nav.move(self.loc, self.bfsFromBase, self.map, self.robotMap, SPECS.UNITS[self.me.unit].SPEED);
             self.log("Move: " + util.pairToString(chosenMove));
             if (util.pairEq(chosenMove, { x: 0, y: 0 })) {
-                // chosenMove = move(self.loc, self.bfsFromBase, self.map, self.getVisibleRobotMap(), SPECS.UNITS[self.me.unit].SPEED);
+                // TODO: alternate move
                 self.log("New move: " + util.pairToString(chosenMove));
                 if (util.pairEq(chosenMove, { x: 0, y: 0 })) {
-                    // self.lastMoveNothing = true;
+                    // TODO: handle stuck pilgrims
                     return pilgrimUtil.pilgrimDontDoNothing(self);
                 }
             }
-            // self.lastMoveNothing = false;
             if (util.sqDist(util.addPair(self.loc, chosenMove), self.base) <= 2 && util.enoughFuelToMove(self, chosenMove)) {
                 self.state = "depositing";
                 self.log("Will arrive at base next turn, state switching to " + self.state);
@@ -178,7 +204,6 @@ pilgrim.takeTurn = (self) => {
         self.log("Pilgrim state: " + self.state);
         if (self.me.karbonite > 0 || self.me.fuel > 0) {
             self.log("Depositing resources at base");
-            // self.lastMoveNothing = false;
             self.state = "going to mine";
             self.log("State for next round changed to " + self.state);
             return self.give(self.base.x - self.loc.x, self.base.y - self.loc.y, self.me.karbonite, self.me.fuel);

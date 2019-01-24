@@ -27,12 +27,16 @@ util.pairToString = (p) => {
     return "(" + p.x + ", " + p.y + ")";
 }
 
-util.inGrid = (pos, length) => {
-    return pos.x >= 0 && pos.y >= 0 && pos.x < length && pos.y < length;
+util.inGrid = (pos, map) => {
+    return pos.x >= 0 && pos.y >= 0 && pos.x < map[0].length && pos.y < map.length;
+}
+
+util.inRect = (pos, minX, minY, maxX, maxY) => {
+    return pos.x >= minX && pos.y >= minY && pos.x <= maxX && pos.y <= maxY;
 }
 
 util.empty = (loc, map, robotMap = null) => {
-    return util.inGrid(loc, map.length) && map[loc.y][loc.x] && (robotMap === null || robotMap[loc.y][loc.x] <= 0);
+    return util.inGrid(loc, map) && map[loc.y][loc.x] && (robotMap === null || robotMap[loc.y][loc.x] <= 0);
 }
 
 util.norm = (v) => {
@@ -79,6 +83,12 @@ util.compareDist = (a, b) => {
         return a.relPos - b.relPos;
     else
         return b.unitType - a.unitType;
+}
+
+util.compareDistToPoint = (pt) => {
+    return function (a, b) {
+        return util.sqDist(a, pt) - util.sqDist(b, pt);
+    };
 }
 
 util.copyPair = (p) => {
@@ -136,7 +146,7 @@ util.enoughFuelToMove = (self, move) => {
 // needs self
 // changed
 util.hasVisibleUnit = (self, loc, unitType) => {
-    if (!util.inGrid(loc, self.robotMap.length))
+    if (!util.inGrid(loc, self.robotMap))
         return false;
     if (self.robotMap[loc.y][loc.x] > 0) {
         let r = self.getRobot(self.robotMap[loc.y][loc.x]);
@@ -148,7 +158,7 @@ util.hasVisibleUnit = (self, loc, unitType) => {
 
 // needs self
 util.canAttack = (self, pos) => {
-    return util.inGrid(pos, self.map.length)
+    return util.inGrid(pos, self.map)
         && util.sqDist(pos, self.loc) >= SPECS.UNITS[self.me.unit].ATTACK_RADIUS[0]
         && util.sqDist(pos, self.loc) <= SPECS.UNITS[self.me.unit].ATTACK_RADIUS[1];
 }
@@ -173,7 +183,7 @@ util.dfs = (adj, v, visited) => {
     visited[v] = true;
     for (let i = 0; i < adj[v].length; i++) {
         if (!visited[adj[v][i]]) {
-            util.dfs(adj[v][i]);
+            util.dfs(adj, adj[v][i], visited);
         }
     }
 }
@@ -191,23 +201,24 @@ util.getConnectedComponents = (adj, v) => {
 }
 
 util.removeEdge = (adj, cc) => {
-    bestPair = [-1, -1];
-    maxMissing = -1;
-    for (let v = 0; v<cc.length; v++){
-        for (let i = 0; i<adj[v].length; i++){
+    let bestPair = [-1, -1];
+    let maxMissing = -1;
+    for (let v = 0; v < cc.length; v++) {
+        for (let i = 0; i < adj[v].length; i++) {
             let u = adj[v][i];
             // consider edge v, u
             let missing = 0;
-            for (let j=0; j<adj[v].length; j++) {
+            for (let j = 0; j < adj[v].length; j++) {
                 if (!adj[u].includes(adj[v][j]))
                     missing++;
             }
-            for (let j=0; j<adj[u].length; j++) {
+            for (let j = 0; j < adj[u].length; j++) {
                 if (!adj[v].includes(adj[u][j]))
                     missing++;
             }
-            if (missing > maxMissing){
+            if (missing > maxMissing) {
                 bestPair = [v, u];
+                maxMissing = missing;
             }
         }
     }

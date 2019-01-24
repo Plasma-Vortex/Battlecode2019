@@ -281,12 +281,16 @@ util.pairToString = (p) => {
     return "(" + p.x + ", " + p.y + ")";
 };
 
-util.inGrid = (pos, length) => {
-    return pos.x >= 0 && pos.y >= 0 && pos.x < length && pos.y < length;
+util.inGrid = (pos, map) => {
+    return pos.x >= 0 && pos.y >= 0 && pos.x < map[0].length && pos.y < map.length;
+};
+
+util.inRect = (pos, minX, minY, maxX, maxY) => {
+    return pos.x >= minX && pos.y >= minY && pos.x <= maxX && pos.y <= maxY;
 };
 
 util.empty = (loc, map, robotMap = null) => {
-    return util.inGrid(loc, map.length) && map[loc.y][loc.x] && (robotMap === null || robotMap[loc.y][loc.x] <= 0);
+    return util.inGrid(loc, map) && map[loc.y][loc.x] && (robotMap === null || robotMap[loc.y][loc.x] <= 0);
 };
 
 util.norm = (v) => {
@@ -333,6 +337,12 @@ util.compareDist = (a, b) => {
         return a.relPos - b.relPos;
     else
         return b.unitType - a.unitType;
+};
+
+util.compareDistToPoint = (pt) => {
+    return function (a, b) {
+        return util.sqDist(a, pt) - util.sqDist(b, pt);
+    };
 };
 
 util.copyPair = (p) => {
@@ -390,7 +400,7 @@ util.enoughFuelToMove = (self, move) => {
 // needs self
 // changed
 util.hasVisibleUnit = (self, loc, unitType) => {
-    if (!util.inGrid(loc, self.robotMap.length))
+    if (!util.inGrid(loc, self.robotMap))
         return false;
     if (self.robotMap[loc.y][loc.x] > 0) {
         let r = self.getRobot(self.robotMap[loc.y][loc.x]);
@@ -402,7 +412,7 @@ util.hasVisibleUnit = (self, loc, unitType) => {
 
 // needs self
 util.canAttack = (self, pos) => {
-    return util.inGrid(pos, self.map.length)
+    return util.inGrid(pos, self.map)
         && util.sqDist(pos, self.loc) >= SPECS.UNITS[self.me.unit].ATTACK_RADIUS[0]
         && util.sqDist(pos, self.loc) <= SPECS.UNITS[self.me.unit].ATTACK_RADIUS[1];
 };
@@ -427,7 +437,7 @@ util.dfs = (adj, v, visited) => {
     visited[v] = true;
     for (let i = 0; i < adj[v].length; i++) {
         if (!visited[adj[v][i]]) {
-            util.dfs(adj[v][i]);
+            util.dfs(adj, adj[v][i], visited);
         }
     }
 };
@@ -445,23 +455,24 @@ util.getConnectedComponents = (adj, v) => {
 };
 
 util.removeEdge = (adj, cc) => {
-    bestPair = [-1, -1];
-    maxMissing = -1;
-    for (let v = 0; v<cc.length; v++){
-        for (let i = 0; i<adj[v].length; i++){
+    let bestPair = [-1, -1];
+    let maxMissing = -1;
+    for (let v = 0; v < cc.length; v++) {
+        for (let i = 0; i < adj[v].length; i++) {
             let u = adj[v][i];
             // consider edge v, u
             let missing = 0;
-            for (let j=0; j<adj[v].length; j++) {
+            for (let j = 0; j < adj[v].length; j++) {
                 if (!adj[u].includes(adj[v][j]))
                     missing++;
             }
-            for (let j=0; j<adj[u].length; j++) {
+            for (let j = 0; j < adj[u].length; j++) {
                 if (!adj[v].includes(adj[u][j]))
                     missing++;
             }
-            if (missing > maxMissing){
+            if (missing > maxMissing) {
                 bestPair = [v, u];
+                maxMissing = missing;
             }
         }
     }
@@ -749,88 +760,117 @@ const signalling = {};
 
 // information taken from lastCreated
 // only for castle and church
-signalling.queueInitSignal = (self, priority = false) => {
-    if (self.lastCreated === null) {
-        return;
-    }
-    if (self.lastCreated[0] === SPECS.PILGRIM) {
-        let hash = 1 << 15; // meant for newest robot
-        let shift = self.lastCreated[1];
-        hash |= util.hashShift(shift) << 12; // bits 12-14 specify position relative to castle
-        hash |= self.castles.length << 10; // bits 10-11 say how many castles there are, so the new unit knows how long to stay
-        hash |= (self.castleNumber + 1) << 8; // bits 8-9 say which castle self is. extra castle positions are listed in increasing order of castle number
-        hash |= self.churches.length << 6; // bits 6-7 say how many churches there are. Note that we can't have over 3 churches.
-        // specify pilgrim goal
-        if (self.lastCreated[2] === "fuel") {
-            hash |= 1 << 4;
-        }
-        hash |= self.lastCreated[3];
-        if (priority) {
-            self.prioritySignalQueue.push({ signal: hash, dist: util.norm(shift) });
-        }
-        else {
-            self.signalQueue.push({ signal: hash, dist: util.norm(shift) });
-        }
+// signalling.queueInitSignal = (self, priority = false) => {
+//     if (self.lastCreated === null) {
+//         return;
+//     }
+//     if (self.lastCreated[0] === SPECS.PILGRIM) {
+//         let hash = 1 << 15; // meant for newest robot
+//         let shift = self.lastCreated[1];
+//         hash |= util.hashShift(shift) << 12; // bits 12-14 specify position relative to castle
+//         hash |= self.castles.length << 10; // bits 10-11 say how many castles there are, so the new unit knows how long to stay
+//         hash |= (self.castleNumber + 1) << 8; // bits 8-9 say which castle self is. extra castle positions are listed in increasing order of castle number
+//         hash |= self.churches.length << 6; // bits 6-7 say how many churches there are. Note that we can't have over 3 churches.
+//         // specify pilgrim goal
+//         if (self.lastCreated[2] === "fuel") {
+//             hash |= 1 << 4;
+//         }
+//         hash |= self.lastCreated[3];
+//         if (priority) {
+//             self.prioritySignalQueue.push({ signal: hash, dist: util.norm(shift) });
+//         }
+//         else {
+//             self.signalQueue.push({ signal: hash, dist: util.norm(shift) });
+//         }
 
-        for (let i = 0; i < self.castles.length; i++) {
-            if (i === self.castleNumber)
-                continue;
-            hash = 1 << 15;
-            hash |= util.hashShift(shift) << 12;
-            hash |= self.castlePos[i].x << 6;
-            hash |= self.castlePos[i].y;
-            if (priority)
-                self.prioritySignalQueue.push({ signal: hash, dist: util.norm(shift) });
-            else
-                self.signalQueue.push({ signal: hash, dist: util.norm(shift) });
-        }
-    }
-    else if (self.lastCreated[0] === SPECS.PREACHER) {
-        self.log("Queueing mage init signal");
-        let hash = 1 << 15; // meant for newest robot
-        let shift = self.lastCreated[1];
-        self.log("Shift: " + util.pairToString(shift));
-        self.log("Distance: " + util.norm(shift));
-        hash |= util.hashShift(shift) << 12; // bits 12-14 specify position relative to castle
-        if (self.lastCreated[2] === "defense") {
-            hash |= 1 << 11; // bit 11 specifies whether mage should defend or attack
-        }
-        hash |= Number(self.lastCreated[3]) << 10; // bit 10 says whether mage should go fast or not
-        hash |= (self.lastCreated[4].x + 16) << 5; // specify shifted relative x-coord of enemy
-        hash |= self.lastCreated[4].y + 16; // specify shifted relative y-coord of enemy
-        if (priority)
-            self.prioritySignalQueue.push({ signal: hash, dist: util.norm(shift) });
-        else
-            self.signalQueue.push({ signal: hash, dist: util.norm(shift) });
-    }
-};
+//         for (let i = 0; i < self.castles.length; i++) {
+//             if (i === self.castleNumber)
+//                 continue;
+//             hash = 1 << 15;
+//             hash |= util.hashShift(shift) << 12;
+//             hash |= self.castlePos[i].x << 6;
+//             hash |= self.castlePos[i].y;
+//             if (priority)
+//                 self.prioritySignalQueue.push({ signal: hash, dist: util.norm(shift) });
+//             else
+//                 self.signalQueue.push({ signal: hash, dist: util.norm(shift) });
+//         }
+//     }
+//     else if (self.lastCreated[0] === SPECS.PREACHER) {
+//         self.log("Queueing mage init signal");
+//         let hash = 1 << 15; // meant for newest robot
+//         let shift = self.lastCreated[1];
+//         self.log("Shift: " + util.pairToString(shift));
+//         self.log("Distance: " + util.norm(shift));
+//         hash |= util.hashShift(shift) << 12; // bits 12-14 specify position relative to castle
+//         if (self.lastCreated[2] === "defense") {
+//             hash |= 1 << 11; // bit 11 specifies whether mage should defend or attack
+//         }
+//         hash |= Number(self.lastCreated[3]) << 10; // bit 10 says whether mage should go fast or not
+//         hash |= (self.lastCreated[4].x + 16) << 5; // specify shifted relative x-coord of enemy
+//         hash |= self.lastCreated[4].y + 16; // specify shifted relative y-coord of enemy
+//         if (priority)
+//             self.prioritySignalQueue.push({ signal: hash, dist: util.norm(shift) });
+//         else
+//             self.signalQueue.push({ signal: hash, dist: util.norm(shift) });
+//     }
+// }
 
-signalling.sendSignal = (self) => {
-    if (self.alreadySignaled) {
+// signalling.sendSignal = (self) => {
+//     if (self.alreadySignalled) {
+//         self.log("ERROR! Tried to signal twice in the same turn");
+//         return;
+//     }
+//     if (self.prioritySignalQueue.isEmpty() && self.signalQueue.isEmpty())
+//         return;
+
+//     let message = 0; // will be overwritten
+//     if (!self.prioritySignalQueue.isEmpty()) {
+//         if (self.fuel < self.prioritySignalQueue.peekFront().dist) {
+//             self.log("Not enough fuel to send message of distance " + self.prioritySignalQueue.peek().dist);
+//             return; // must save up fuel
+//         }
+//         message = self.prioritySignalQueue.shift();
+//     }
+//     else {
+//         if (self.fuel < self.signalQueue.peekFront().dist) {
+//             self.log("Not enough fuel to send message of distance " + self.signalQueue.peekFront().dist);
+//             return; // must save up fuel
+//         }
+//         message = self.signalQueue.shift();
+//     }
+//     self.log("Sending signal " + message.signal);
+//     self.signal(message.signal, message.dist);
+//     self.alreadySignalled = true;
+// }
+
+// for castles or churches only
+signalling.pilgrimInitSignal = (self, resourceID, shift) => {
+    if (self.alreadySignalled) {
         self.log("ERROR! Tried to signal twice in the same turn");
         return;
     }
-    if (self.prioritySignalQueue.isEmpty() && self.signalQueue.isEmpty())
-        return;
+    self.signal((1 << 15) + resourceID, util.norm(shift));
+    self.alreadySignalled = true;
+};
 
-    let message = 0; // will be overwritten
-    if (!self.prioritySignalQueue.isEmpty()) {
-        if (self.fuel < self.prioritySignalQueue.peekFront().dist) {
-            self.log("Not enough fuel to send message of distance " + self.prioritySignalQueue.peek().dist);
-            return; // must save up fuel
-        }
-        message = self.prioritySignalQueue.shift();
+// for castles only
+signalling.churchPilgrimInitSignal = (self, clusterID, dist) => {
+    if (self.alreadySignalled) {
+        self.log("ERROR! Tried to signal twice in the same turn");
+        return;
     }
-    else {
-        if (self.fuel < self.signalQueue.peekFront().dist) {
-            self.log("Not enough fuel to send message of distance " + self.signalQueue.peekFront().dist);
-            return; // must save up fuel
-        }
-        message = self.signalQueue.shift();
+    self.signal((1 << 15) + self.allResources.length + clusterID, dist);
+    self.alreadySignalled = true;
+};
+
+signalling.pilgrimToNewChurch = (self, resourceID, shift) => {
+    if (self.alreadySignalled) {
+        self.log("ERROR! Tried to signal twice in the same turn");
+        return;
     }
-    self.log("Sending signal " + message.signal);
-    self.signal(message.signal, message.dist);
-    self.alreadySignaled = true;
+    self.signal((1<<15) + resourceID, util.norm(shift));
+    self.alreadySignalled = true;
 };
 
 // done change
@@ -838,49 +878,49 @@ signalling.sendSignal = (self) => {
 const castleUtil = {};
 
 // for castles only
-// for addNewUnits
-castleUtil.knownID = (self, id) => {
-    return (self.castles.includes(id) || self.churches.includes(id)
-        || self.karbPilgrims.includes(id) || self.fuelPilgrims.includes(id)
-        || self.crusaders.includes(id) || self.prophets.includes(id) || self.preachers.includes(id));
-};
-
-// for castles only
-castleUtil.addNewUnits = (self, visible) => {
-    for (let i = 0; i < visible.length; i++) {
-        let r = visible[i];
-        if (r.team === self.me.team && (r.castle_talk >> 7)) {
-            if (castleUtil.knownID(self, r.id))
+castleUtil.addNewUnits = (self) => {
+    for (let i = 0; i < self.visible.length; i++) {
+        let r = self.visible[i];
+        if (r.team === self.me.team && r.castle_talk >= (1 << 6)) {
+            if (self.unitInfo[r.id].type !== -1)
                 continue;
             // newly created robot
             self.log("Notified of a new robot!");
             let message = r.castle_talk;
-            let unitType = ((message >> 5) & ((1 << 2) - 1)) + 2;
-            if (unitType === SPECS.PILGRIM) {
-                if ((message >> 4) & 1) { // fuel pilgrim
-                    self.log("It's a fuel pilgrim with id " + r.id);
-                    self.fuelPilgrims.push(r.id);
-                    let fuelID = message & ((1 << 4) - 1);
-                    self.log("It targets fuel #" + fuelID);
-                    self.targetFuel[fuelID].assignedWorker = r.id;
+            if (message >> 7 && message < (1 << 7) + self.allResources.length + self.clusters.length) { // pilgrim
+                self.unitInfo[r.id].type = SPECS.PILGRIM;
+                self.unitInfo[r.id].info = message - (1 << 7); // resource or church ID
+                if (self.unitInfo[r.id].info < self.allResources.length) {
+                    // resource pilgrim
+                    let clusterIndex = self.clusterIDtoIndex[self.allResources[self.unitInfo[id].info].clusterID];
+                    for (let j = 0; j < self.clusters[clusterIndex].karb.length; j++) {
+                        if (self.clusters[clusterIndex].karb[j] === self.unitInfo[r.id].info) { // karb pilgrim
+                            self.clusterProgress[clusterIndex].karb[j] = r.id;
+                            self.clusterProgress[clusterIndex].karbPilgirms++;
+                        }
+                    }
+                    for (let j = 0; j < self.clusters[clusterIndex].fuel.length; j++) {
+                        if (self.clusters[clusterIndex].fuel[j] === self.unitInfo[r.id].info) { // fuel pilgrim
+                            self.clusterProgress[clusterIndex].fuel[j] = r.id;
+                            self.clusterProgress[clusterIndex].fuelPilgirms++;
+                        }
+                    }
+                    castleUtil.updateDone(self, self.clusterProgress[clusterIndex]);
                 }
                 else {
-                    self.log("It's a karb pilgrim with id " + r.id);
-                    self.karbPilgrims.push(r.id);
-                    let karbID = message & ((1 << 4) - 1);
-                    self.log("It targets karb #" + karbID);
-                    self.targetKarb[karbID].assignedWorker = r.id;
+                    // church pilgrim
+                    let clusterIndex = self.clusterIDtoIndex[self.unitInfo[id].info - self.allResources.length];
+                    self.clusterProgress[clusterIndex].church = 1;
                 }
             }
-            else if (unitType === SPECS.CRUSADER) {
-                self.crusaders.push(r.id);
-            }
-            else if (unitType === SPECS.PROPHET) {
-                self.prophets.push(r.id);
-            }
-            else if (unitType === SPECS.PREACHER) {
-                self.preachers.push(r.id);
-            }
+            else if (message >> 7) { // church
+                let clusterID = message - ((1 << 7) + self.allResources.length + self.clusters.length);
+                self.unitInfo[r.id].type = SPECS.CHURCH;
+                self.unitInfo[r.id].info = clusterID;
+                let clusterIndex = self.clusterIDtoIndex[clusterID];
+                self.clusterProgress[clusterIndex].church = 2;
+                castleUtil.updateDone(self, self.clusterProgress[clusterIndex]);
+            } // TODO: add comms for new units of other types
             else {
                 self.log("ERROR! When adding new unit, unitType is invalid");
             }
@@ -888,147 +928,193 @@ castleUtil.addNewUnits = (self, visible) => {
     }
 };
 
-castleUtil.updateUnitList = (unitList, visible) => {
-    unitList = unitList.filter((id) => {
-        for (let i = 0; i < visible.length; i++) {
-            if (id === visible[i].id)
-                return true;
-        }
-        return false;
-    });
-};
-
-castleUtil.updateAllUnitLists = (self, visible) => {
+castleUtil.updateUnitInfo = (self) => {
     // check deaths
-    let updatedKarbPilgrims = [];
-    for (let i = 0; i < self.targetKarb.length; i++) {
-        let id = self.targetKarb[i].assignedWorker;
-        if (id > 0) {
-            let stillAlive = false;
-            for (let j = 0; j < visible.length; j++) {
-                if (id === visible[j].id) {
-                    stillAlive = true;
-                }
-            }
-            if (stillAlive) {
-                updatedKarbPilgrims.push(id);
-            }
-            else {
-                self.targetKarb[i].assignedWorker = -1;
-            }
+    let stillAlive = new Array(4097).fill(false);
+    for (let i = 0; i < self.visible.length; i++) {
+        if (self.visible[i].team === self.me.team) {
+            stillAlive[self.visible[i].id] = true;
         }
     }
-    self.karbPilgrims = updatedKarbPilgrims;
 
-    let updatedFuelPilgrims = [];
-    for (let i = 0; i < self.targetFuel.length; i++) {
-        let id = self.targetFuel[i].assignedWorker;
-        if (id > 0) {
-            let stillAlive = false;
-            for (let j = 0; j < visible.length; j++) {
-                if (id === visible[j].id) {
-                    stillAlive = true;
-                }
-            }
-            if (stillAlive) {
-                updatedFuelPilgrims.push(id);
-            }
-            else {
-                self.targetFuel[i].assignedWorker = -1;
-            }
+    for (let id = 1; id <= 4096; id++) {
+        if (self.unitInfo[id].type === -1 || stillAlive[id]) {
+            continue;
         }
-    }
-    self.FuelPilgrims = updatedFuelPilgrims;
-
-    castleUtil.updateUnitList(self.churches, visible);
-    castleUtil.updateUnitList(self.crusaders, visible);
-    castleUtil.updateUnitList(self.prophets, visible);
-    castleUtil.updateUnitList(self.preachers, visible);
-
-    // check new units
-    castleUtil.addNewUnits(self, visible);
-
-    // add new way of finding newly build churches via pilgrim castleTalk
-};
-
-// TODO: if new unit gets killed when assignedWorker = 0, need to replace 
-castleUtil.buildKarbPilgrim = (self) => {
-    // is min necessary when desired is always at most targetKarb.length?
-    for (let i = 0; i < Math.min(self.targetKarb.length, self.desiredKarbPilgrims); i++) {
-        if (self.targetKarb[i].assignedCastle === self.castleNumber
-            && self.targetKarb[i].assignedWorker === -1) {
-            // found first needed karb pilgrim
-            self.targetKarb[i].assignedWorker = 0; // 0 means pilgrim exists but id unknown
-
-            // make clone instead of reference
-            let destination = util.copyPair(self.targetKarb[i].pos);
-
-            // choose best starting placement around castle
-            let minDist = 1000000;
-            let bestShift = { x: -100, y: -100 };
-            for (let dx = -1; dx <= 1; dx++) {
-                for (let dy = -1; dy <= 1; dy++) {
-                    let shift = { x: dx, y: dy };
-                    let pos = util.addPair(self.loc, shift);
-                    if (util.empty(pos, self.map, self.robotMap)) {
-                        if (util.sqDist(pos, destination) < minDist) {
-                            minDist = util.sqDist(pos, destination);
-                            bestShift = shift;
-                        }
+        if (self.unitInfo[id].type === SPECS.PILGRIM) {
+            // unit info for pilgrim is its resource id, or church cluster id
+            let clusterIndex = -1;
+            if (self.unitInfo[id].info >= self.allResources.length) { // church pilgrim
+                clusterIndex = self.clusterIDtoIndex[self.unitInfo[id].info - self.allResources.length];
+                self.clusterProgress[clusterIndex].church = -1; // since it died this turn, enemy must be nearby
+                // TODO: pilgrim may have been killed on the way, this does not mean enemy occupies cluster
+            }
+            else if (self.allResources[self.unitInfo[id].info].type === 0) { // karb pilgrim
+                clusterIndex = self.clusterIDtoIndex[self.allResources[self.unitInfo[id].info].clusterID];
+                for (let j = 0; j < self.clusterProgress[clusterIndex].karb.length; j++) {
+                    if (self.clusterProgress[clusterIndex].karb[j] === id) {
+                        self.clusterProgress[clusterIndex].karb[j] = -1;
                     }
                 }
+                self.clusterProgress[clusterIndex].karbPilgrims--;
             }
+            else { // fuel pilgrim
+                clusterIndex = self.clusterIDtoIndex[self.allResources[self.unitInfo[id].info].clusterID];
+                for (let j = 0; j < self.clusterProgress[clusterIndex].fuel.length; j++) {
+                    if (self.clusterProgress[clusterIndex].fuel[j] === id) {
+                        self.clusterProgress[clusterIndex].fuel[j] = -1;
+                    }
+                }
+                self.clusterProgress[clusterIndex].fuelPilgrims--;
+            }
+            self.clusterProgress[clusterIndex].done = false;
+        }
+        else if (self.unitInfo[id].type === SPECS.CASTLE) {
+            // unit info for castle is its cluster id (might want to change?)
+            let clusterIndex = self.clusterIDtoIndex[self.unitInfo[id].info];
+            self.clusters[clusterIndex].castle = 0; // castle no longer exists
+            self.clusterProgress[clusterIndex].church = -1; // since it died this turn, enemy must be nearby
+            self.clusterProgress[clusterIndex].done = false;
+            // TODO: recompute closest castle for all clusters (might not be necessary after self.clusters[clusterIndex].castle = 0)
+            // sort clusters again? (need to keep clusterProgress in same order as self.clusters, or index clusterProgress by cluster id)
+        }
+        else if (self.unitInfo[id].type === SPECS.CHURCH) {
+            // unit info for church is its cluster id
+            let clusterIndex = self.clusterIDtoIndex[self.unitInfo[id].info];
+            self.clusterProgress[clusterIndex].church = -1; // since it died this turn, enemy must be nearby
+            self.clusterProgress[clusterIndex].done = false;
+        }
+        // TODO: add for other unit types
+        self.unitInfo[id] = { type: -1, info: -1 };
+    }
 
-            self.log("Buliding Karb Pilgrim at " + util.pairToString(util.addPair(self.loc, bestShift))
-                + " to target karb #" + i + " at " + util.pairToString(destination));
+    // check new units
+    castleUtil.addNewUnits(self);
+};
 
-            self.lastCreated = [SPECS.PILGRIM, bestShift, "karb", i];
-            signalling.queueInitSignal(self);
-            signalling.sendSignal(self);
-            return self.buildUnit(SPECS.PILGRIM, bestShift.x, bestShift.y);
+
+
+
+// castle resource code
+
+
+// for castles only
+castleUtil.initClusterProgress = (self) => {
+    self.clusterProgress = [];
+    for (let i = 0; i < self.clusters.length; i++) {
+        // clusterProgress.church:
+        // 0 means no church
+        // 1 means pilgrim moving to build church
+        // 2 means church already built
+        // -1 means controlled by enemy
+        // karbPilgrims, fuelPilgrims, and prophets are lists of IDs
+        self.clusterProgress.push({
+            church: 0,
+            karb: new Array(self.cluster[i].karb.length).fill(-1), // ID of assigned worker
+            fuel: new Array(self.cluster[i].fuel.length).fill(-1),
+            karbPilgirms: 0,
+            fuelPilgrims: 0,
+            prophets: [],
+            done: false
+        });
+        if (self.cluster[i].castle > 0) {
+            self.clusterProgress[i].church = 2;
+        }
+        else if (self.cluster[i].castle < 0) {
+            self.clusterProgress[i].church = -1;
+        }
+    }
+};
+
+castleUtil.updateDone = (self, clusterIndex) => {
+    self.clusterProgress[clusterIndex].done = (self.clusterProgress[clusterIndex].karbPilgirms >= self.clusters[clusterIndex].karb.length
+        && self.clusterProgress[clusterIndex].fuelPilgirms >= self.clusters[clusterIndex].fuel.length
+        && self.clusterProgress[clusterIndex].prophets.length >= castleUtil.neededDefenseProphets(self, clusterIndex));
+};
+
+// for castles only
+// move to castleUtil?
+castleUtil.getTargetCluster = (self) => {
+    if (!self.clusterProgress[self.myCluster].done)
+        return self.myCluster; // first priority is to finish your own cluster
+    for (let i = 0; i < self.clusters.length; i++) {
+        if (self.clusters[i].castle > 0 && !self.clusterProgress[i].done)
+            return -1; // wait for other castles to finish setting up their clusters
+    }
+    // for other clusters, only way for castle to help is to send church pilgrim if church = 0, or attack if church = -1
+    for (let i = 0; i < self.clusterProgress.length; i++) {
+        if (self.clusterProgress[i].church === 0) {
+            // cluster i is the next one to target
+            if (self.clusters[i].closestCastle.castleID === self.castleNumber)
+                return i; // send a church pilgrim
+            else
+                return -1; // wait for other castles to send church pilgrim
+        }
+        else if (self.clusterProgress[i].church === -1) {
+            return i; // all castles should attack
+        }
+    }
+};
+
+// for castles and churches only
+// always for current cluster
+// TODO: fix case when pilgrim killed while id unknown (0). Do this in update by checking new visible units
+castleUtil.buildKarbPilgrim = (self) => {
+    for (let i = 0; i < self.clusterProgress[self.myCluster].karb.length; i++) {
+        if (self.clusterProgress[self.myCluster].karb[i] === -1) {
+            // found first needed karb pilgrim
+            self.clusterProgress[self.myCluster].karb[i] = 0; // 0 means pilgrim exists but id unknown
+            let resourceID = self.clusters[self.myCluster].karb[i];
+            let destination = self.allResources[resourceID].pos;
+            let shift = castleUtil.closestAdjacent(self, destination);
+
+            self.log("Buliding karb pilgrim at " + util.pairToString(util.addPair(self.loc, shift))
+                + " to target karb at " + util.pairToString(destination));
+            signalling.pilgrimInitSignal(self, resourceID, shift);
+            return self.buildUnit(SPECS.PILGRIM, shift.x, shift.y);
         }
     }
     self.log("ERROR! Tried to build karb pilgrim when desired number is already reached");
 };
 
-// copy karb shift
-// TODO: if new unit gets killed when assignedWorker = 0, need to replace 
+// for castles and churches only
+// always for current cluster
+// TODO: fix case when pilgrim killed while id unknown (0). Do this in update by checking new visible units
 castleUtil.buildFuelPilgrim = (self) => {
-    // is min necessary when desired is always at most targetFuel.length?
-    for (let i = 0; i < Math.min(self.targetFuel.length, self.desiredFuelPilgrims); i++) {
-        if (self.targetFuel[i].assignedCastle === self.castleNumber
-            && self.targetFuel[i].assignedWorker === -1) {
+    for (let i = 0; i < self.clusterProgress[self.myCluster].fuel.length; i++) {
+        if (self.clusterProgress[self.myCluster].fuel[i] === -1) {
             // found first needed fuel pilgrim
-            self.targetFuel[i].assignedWorker = 0; // 0 means pilgrim exists but id unknown
+            self.clusterProgress[self.myCluster].fuel[i] = 0; // 0 means pilgrim exists but id unknown
+            let resourceID = self.clusters[self.myCluster].fuel[i];
+            let destination = self.allResources[resourceID].pos;
+            let shift = castleUtil.closestAdjacent(self, destination);
 
-            // make clone instead of reference
-            let destination = util.copyPair(self.targetFuel[i].pos);
-
-            // choose best starting placement around castle
-            let minDist = 1000000;
-            let bestPos = { x: -1, y: -1 };
-            for (let dx = -1; dx <= 1; dx++) {
-                for (let dy = -1; dy <= 1; dy++) {
-                    let pos = { x: self.loc.x + dx, y: self.loc.y + dy };
-                    // self.log("Starting placement in consideration: " + pairToString(pos));
-                    if (util.empty(pos, self.map, self.robotMap)) {
-                        if (util.sqDist(pos, destination) < minDist) {
-                            minDist = util.sqDist(pos, destination);
-                            bestPos = pos;
-                        }
-                    }
-                }
-            }
-
-            self.log("Buliding Fuel Pilgrim at " + util.pairToString(bestPos)
-                + " to target fuel #" + i + " at " + util.pairToString(destination));
-            let shift = util.subtractPair(bestPos, self.loc);
-            self.lastCreated = [SPECS.PILGRIM, shift, "fuel", i];
-            signalling.queueInitSignal(self);
-            signalling.sendSignal(self);
+            self.log("Buliding fuel pilgrim at " + util.pairToString(util.addPair(self.loc, shift))
+                + " to target fuel at " + util.pairToString(destination));
+            signalling.pilgrimInitSignal(self, resourceID, shift);
             return self.buildUnit(SPECS.PILGRIM, shift.x, shift.y);
         }
     }
+    self.log("ERROR! Tried to build fuel pilgrim when desired number is already reached");
+};
+
+// choose best starting placement around castle
+castleUtil.closestAdjacent = (self, destination) => {
+    let minDist = 1000000;
+    let bestShift = { x: -100, y: -100 };
+    for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+            let shift = { x: dx, y: dy };
+            let pos = util.addPair(self.loc, shift);
+            if (util.empty(pos, self.map, self.robotMap)) {
+                if (util.sqDist(pos, destination) < minDist) {
+                    minDist = util.sqDist(pos, destination);
+                    bestShift = shift;
+                }
+            }
+        }
+    }
+    return bestShift;
 };
 
 castleUtil.buildDefenseMage = (self, enemy) => { // enemy.relPos is relative position to castle
@@ -1067,6 +1153,33 @@ castleUtil.buildDefenseMage = (self, enemy) => { // enemy.relPos is relative pos
     return self.buildUnit(SPECS.PREACHER, bestShift.x, bestShift.y);
 };
 
+// for castles and churches
+// TODO: take into account distance to enemy castles / middle
+castleUtil.neededDefenseProphets = (self, clusterIndex) => {
+    // return self.clusters[self.myCluster].mines.length;
+    return 0;
+};
+
+castleUtil.buildChurchPilgrim = (self, clusterIndex) => {
+    // assign pilgrim to closest karb
+    // let assignedMine = self.clusters[clusterIndex].karb[0]; // if pilgrims can already calculate, why signal to them?
+    let shift = castleUtil.closestAdjacent(self, self.clusters[clusterIndex].churchPos);
+    signalling.churchPilgrimInitSignal(self, self.clusters[clusterIndex].id, util.norm(shift));
+    return self.buildUnit(SPECS.PILGRIM, shift.x, shift.y);
+};
+
+// almost identical to pilgrim's map, but without exception for target mine and base
+castleUtil.initAvoidMinesMap = (self) => {
+    self.avoidMinesMap = [];
+    for (let x = 0; x < self.map.length; x++)
+        self.avoidMinesMap.push(new Array(self.map.length));
+    for (let x = 0; x < self.map.length; x++) {
+        for (let y = 0; y < self.map.length; y++) {
+            self.avoidMinesMap[y][x] = (self.map[y][x] && !self.karbonite_map[y][x] && !self.fuel_map[y][x]);
+        }
+    }
+};
+
 const nav = {};
 
 // TODO: when stuck, perform full bfs treating robot positions as fixed
@@ -1075,8 +1188,8 @@ nav.bfs = (start, map) => {
     let visited = new Array(map.length);
     let dist = new Array(map.length);
     for (let i = 0; i < map.length; i++) {
-        visited[i] = new Array(map.length).fill(false);
-        dist[i] = new Array(map.length).fill(1000000);
+        visited[i] = new Array(map[0].length).fill(false);
+        dist[i] = new Array(map[0].length).fill(1000000);
     }
     q.push(start);
     visited[start.y][start.x] = true;
@@ -1101,8 +1214,8 @@ nav.fullBFS = (start, map, speed, beside = false) => {
     let visited = new Array(map.length);
     let dist = new Array(map.length);
     for (let i = 0; i < map.length; i++) {
-        visited[i] = new Array(map.length).fill(false);
-        dist[i] = new Array(map.length).fill(1000000);
+        visited[i] = new Array(map[0].length).fill(false);
+        dist[i] = new Array(map[0].length).fill(1000000);
     }
     if (beside) {
         for (let dx = -1; dx <= 1; dx++) {
@@ -1289,66 +1402,321 @@ resource.canMaintainBuffer = (self, unitType) => {
         && self.fuel - SPECS.UNITS[unitType].CONSTRUCTION_FUEL >= self.fuelBuffer);
 };
 
+// main function
+resource.mainInit = (self) => {
+    resource.initFullResourceList(self);
+    resource.splitIntoClusters(self);
+    for (let i = 0; i < self.clusters.length; i++) {
+        resource.computeChurchPosition(self, self.clusters[i]);
+        self.clusters[i].mines.sort(util.compareDistToPoint(self.clusters[i].churchPos));
+        resource.splitByResource(self, self.clusters[i]);
+    }
+    resource.assignClusterIDs(self);
+    if (self.me.unit === SPECS.CASTLE) {
+        resource.findCastleClusters(self);
+        for (let i = 0; i < self.clusters.length; i++) {
+            resource.findClosestCastle(self, self.clusters[i]);
+        }
+        self.clusters.sort(resource.sortByPriority);
+        self.clusterIDtoIndex = new Array(self.clusters.length);
+        for (let i = 0; i < self.clusters.length; i++) {
+            self.clusterIDtoIndex[self.clusters[i].id] = i;
+        }
+    }
+    self.log("Finished making clusters!");
+    for (let i = 0; i < self.clusters.length; i++)
+        self.log(self.clusters[i]);
+};
+
 resource.initFullResourceList = (self) => {
     self.allResources = [];
     for (let x = 0; x < self.map.length; x++) {
         for (let y = 0; y < self.map.length; y++) {
             if (self.karbonite_map[y][x])
-                self.allResources.push({ type: 0, pos: { x: x, y: y } });
+                self.allResources.push({ type: 0, pos: { x: x, y: y }, clusterID: -1 });
             else if (self.fuel_map[y][x])
-                self.allResources.push({ type: 1, pos: { x: x, y: y } });
+                self.allResources.push({ type: 1, pos: { x: x, y: y }, clusterID: -1 });
         }
+    }
+    self.log("self.allResources");
+    for (let i = 0; i < self.allResources.length; i++) {
+        self.log("self.allResources[" + i + "].pos = " + util.pairToString(self.allResources[i].pos));
     }
 };
 
 resource.splitIntoClusters = (self) => {
-    self.resourceGraph = [];
+    self.resourceGraph = new Array(self.allResources.length);
+    for (let i = 0; i < self.allResources.length; i++)
+        self.resourceGraph[i] = [];
     for (let i = 0; i < self.allResources.length; i++) {
-        for (let j = i + 1; j < self.allResources.length; i++) {
-            if (util.L1Norm(self.allResources[i].pos, self.allResources[j].pos) <= 8) {
+        for (let j = i + 1; j < self.allResources.length; j++) {
+            if (util.L1Norm(self.allResources[i].pos, self.allResources[j].pos) <= 6) {
                 self.resourceGraph[i].push(j);
                 self.resourceGraph[j].push(i);
             }
         }
     }
-    let allCliques = false;
-    let inClique = new Array(self.allResources.length).fill(false);
-    let clusters = [];
-    while (!allCliques) {
-        let changed = false;
-        for (let i = 0; i < self.allResources.length; i++) {
-            if (inClique[i])
-                continue;
-            let connectedComponent = util.getConnectedComponents(self.resourceGraph, i);
-            let thisIsClique = true;
-            for (let j = 0; j < connectedComponent.length; j++) {
-                if (self.resourceGraph[j].length !== connectedComponent.length - 1) {
-                    thisIsClique = false;
-                    let edge = util.removeEdge(self.resourceGraph, connectedComponent);
-                    self.log("Removing edge " + edge[0] + " - " + edge[1]);
-                    adj[edge[0]].splice(adj[edge[0]].indexOf(edge[1]), 1); // TODO: move into removeEdge function if logging is not needed
-                    adj[edge[1]].splice(adj[edge[1]].indexOf(edge[0]), 1);
-                    changed = true;
-                    break;
-                }
-            }
-            if (thisIsClique) {
-                for (let j = 0; j < connectedComponent.length; j++) {
-                    inClique[connectecComponent[j]] = true;
-                }
-                clusters.push(connectedComponent);
-            }
-            if (changed)
-                break;
+    let inCluster = new Array(self.allResources.length).fill(false);
+    self.clusters = [];
+    for (let i = 0; i < self.allResources.length; i++) {
+        if (inCluster[i])
+            continue;
+        let connectedComponent = util.getConnectedComponents(self.resourceGraph, i);
+        self.log("New Cluster!");
+        for (let j = 0; j < connectedComponent.length; j++) {
+            inCluster[connectedComponent[j]] = true;
+            self.log(util.pairToString(self.allResources[connectedComponent[j]].pos));
         }
-        allCliques = true;
-        for (let i = 0; i < self.inClique.length; i++) {
-            if (!self.inClique[i])
-                allCliques = false;
+        self.clusters.push({
+            mines: connectedComponent,
+            castle: 0,
+            churchPos: { x: -1, y: -1 },
+            karb: [],
+            fuel: [],
+            id: -1,
+            closestCastle: { castleID: -1, dist: -1 }
+        });
+    }
+};
+
+// let allCliques = false;
+//     let inClique = new Array(self.allResources.length).fill(false);
+//     self.clusters = [];
+//     while (!allCliques) {
+//         let changed = false;
+//         for (let i = 0; i < self.allResources.length; i++) {
+//             if (inClique[i])
+//                 continue;
+//             let connectedComponent = util.getConnectedComponents(self.resourceGraph, i);
+//             let thisIsClique = true;
+//             for (let j = 0; j < connectedComponent.length; j++) {
+//                 if (self.resourceGraph[connectedComponent[j]].length !== connectedComponent.length - 1) {
+//                     thisIsClique = false;
+//                     let edge = util.removeEdge(self.resourceGraph, connectedComponent);
+//                     self.log("Removing edge " + edge[0] + " - " + edge[1]);
+//                     if (edge[0] === -1) {
+//                         for (let k = 0; k < connectedComponent.length; k++) {
+//                             self.log("adj[" + connectedComponent[k] + "]: " + self.resourceGraph[connectedComponent[k]]);
+//                         }
+//                     }
+//                     self.resourceGraph[edge[0]].splice(self.resourceGraph[edge[0]].indexOf(edge[1]), 1); // TODO: move into removeEdge function if logging is not needed
+//                     self.resourceGraph[edge[1]].splice(self.resourceGraph[edge[1]].indexOf(edge[0]), 1);
+//                     changed = true;
+//                     break;
+//                 }
+//             }
+//             if (thisIsClique) {
+//                 self.log("New Clique Found!");
+//                 for (let j = 0; j < connectedComponent.length; j++) {
+//                     inClique[connectedComponent[j]] = true;
+//                     self.log(util.pairToString(self.allResources[connectedComponent[j]].pos));
+//                 }
+//                 self.clusters.push({
+//                     mines: connectedComponent,
+//                     castle: 0,
+//                     churchPos: { x: -1, y: -1 },
+//                     karb: [],
+//                     fuel: [],
+//                     id: -1,
+//                     closestCastle: { castleID: -1, dist: -1 }
+//                 });
+//             }
+//             if (changed)
+//                 break;
+//         }
+//         allCliques = true;
+//         for (let i = 0; i < inClique.length; i++) {
+//             if (!inClique[i])
+//                 allCliques = false;
+//         }
+//     }
+
+resource.computeChurchPosition = (self, cluster) => {
+    // if (cluster.hasCastle) // doesn't need a church because it has a castle
+    //     return; // might calculate churchPos anyway, to number clusters without castle location knowledge
+    let minX = 1000;
+    let minY = 1000;
+    let maxX = -1000;
+    let maxY = -1000;
+    for (let i = 0; i < cluster.mines.length; i++) {
+        minX = Math.min(minX, self.allResources[cluster.mines[i]].pos.x);
+        minY = Math.min(minY, self.allResources[cluster.mines[i]].pos.y);
+        maxX = Math.max(maxX, self.allResources[cluster.mines[i]].pos.x);
+        maxY = Math.max(maxY, self.allResources[cluster.mines[i]].pos.y);
+    }
+    minX = Math.max(0, minX - 1);
+    minY = Math.max(0, minY - 1);
+    maxX = Math.min(self.map.length - 1, maxX + 1);
+    maxY = Math.min(self.map.length - 1, maxY + 1);
+    self.log("minX = " + minX + ", maxX = " + maxX + ", minY = " + minY + ", maxY = " + maxY);
+
+    let smallMap = [];
+    let adjacentMines = [];
+    let extraTime = [];
+    // let bfs = [];
+    for (let i = 0; i <= maxY - minY; i++) {
+        smallMap.push(new Array(maxX - minX + 1));
+        adjacentMines.push(new Array(maxX - minX + 1).fill(0));
+        extraTime.push(new Array(maxX - minX + 1).fill(0));
+        // bfs.push(new Array(maxX - minX + 1));
+    }
+
+    for (let x = 0; x <= maxX - minX; x++) {
+        for (let y = 0; y <= maxY - minY; y++) {
+            smallMap[y][x] = self.map[y + minY][x + minX]; // TODO: pilgrims avoid all mines except their own
         }
     }
-    clusters.sort(clusterCompare);
-    return clusters;
+
+    let foundChurch = false;
+    let maxAdjacentMines = -1;
+    for (let x = 0; x <= maxX - minX; x++) {
+        for (let y = 0; y <= maxY - minY; y++) {
+            if (smallMap[y][x]) {
+                foundChurch = true;
+                // calculate number of adjacent mines
+                for (let i = 0; i < 8; i++) {
+                    let p = util.addPair({ x: x + minX, y: y + minY }, util.unhashShift(i));
+                    if (util.inGrid(p, self.map) && (self.karbonite_map[p.y][p.x] || self.fuel_map[p.y][p.x]))
+                        adjacentMines[y][x]++;
+                }
+                maxAdjacentMines = Math.max(maxAdjacentMines, adjacentMines[y][x]);
+            }
+        }
+    }
+    if (!foundChurch) {
+        self.log("ERROR! No possible church location in rectangle");
+        self.log("Cluster:");
+        self.log(cluster);
+        self.log("minX = " + minX + ", maxX = " + maxX + ", minY = " + minY + ", maxY = " + maxY);
+    }
+
+    // for pilgrim passing chain
+
+    // for (let x = 0; x <= maxX - minX; x++) {
+    //     for (let y = 0; y <= maxY - minY; y++) {
+    //         if (adjacentMines[y][x] >= maxAdjacentMines - 1
+    //             || self.karbonite_map[y + minY][x + minX] || self.fuel_map[y + minY][x + minX]) {
+    //             // bfs might be slow, even when bounded
+    //             bfs[y][x] = nav.fullBFS({ x: x, y: y }, smallMap, SPECS.UNITS[SPECS.PILGRIMS].SPEED, true);
+    //         }
+    //     }
+    // }
+
+    let minExtraTime = 1000000;
+    for (let x = 0; x <= maxX - minX; x++) {
+        for (let y = 0; y <= maxY - minY; y++) {
+            if (adjacentMines[y][x] >= maxAdjacentMines - 1) {
+                let bfs = nav.fullBFS({ x: x, y: y }, smallMap, SPECS.UNITS[SPECS.PILGRIM].SPEED, true);
+                // calculate nunber of extra turns needed
+                self.log("Considering church position " + util.pairToString({ x: x + minX, y: y + minY }));
+                let extraTime = 0;
+                for (let i = 0; i < cluster.mines.length; i++) {
+                    extraTime += bfs[self.allResources[cluster.mines[i]].pos.y - minY][self.allResources[cluster.mines[i]].pos.x - minX];
+                }
+                self.log("Extra time = " + extraTime);
+                if (extraTime < minExtraTime) {
+                    minExtraTime = extraTime;
+                    cluster.churchPos = { x: x + minX, y: y + minY };
+                }
+            }
+        }
+    }
+};
+
+resource.sortByChurchPos = (a, b) => {
+    if (a.churchPos.x !== b.churchPos.x)
+        return a.churchPos.x - b.churchPos.x;
+    else
+        return a.churchPos.y - b.churchPos.y;
+};
+
+resource.assignClusterIDs = (self) => {
+    self.clusters.sort(resource.sortByChurchPos);
+    for (let i = 0; i < self.clusters.length; i++) {
+        self.clusters[i].id = i;
+        for (let j = 0; j < self.clusters[i].mines.length; j++) {
+            self.allResources[self.clusters[i].mines[j]].clusterID = i;
+        }
+    }
+};
+
+// TODO: set church = 2 or church = -1
+// for castles only
+resource.findCastleClusters = (self) => {
+    for (let i = 0; i < self.castlePos.length; i++) {
+        let minDist = 1000000;
+        let closest = -1;
+        for (let j = 0; j < self.allResources.length; j++) {
+            if (util.sqDist(self.castlePos[i], self.allResources[j].pos) < minDist) {
+                minDist = util.sqDist(self.castlePos[i], self.allResources[j].pos);
+                closest = j;
+            }
+        }
+        // Consider specifying which castle?
+        // Should add enemy castles too, attack those last
+        for (let j = 0; j < self.clusters.length; j++) {
+            if (self.clusters[j].mines.includes(closest)) {
+                self.clusters[j].castle = i + 1;
+                // self.clusters[j].churchPos = util.copyPair(self.castlePos[i]);
+            }
+        }
+    }
+    // enemy castles
+    for (let i = 0; i < self.enemyCastlePos.length; i++) {
+        let minDist = 1000000;
+        let closest = -1;
+        for (let j = 0; j < self.allResources.length; j++) {
+            if (util.sqDist(self.enemyCastlePos[i], self.allResources[j].pos) < minDist) {
+                minDist = util.sqDist(self.enemyCastlePos[i], self.allResources[j].pos);
+                closest = j;
+            }
+        }
+        // Consider specifying which castle?
+        // Should add enemy castles too, attack those last
+        for (let j = 0; j < self.clusters.length; j++) {
+            if (self.clusters[j].mines.includes(closest)) {
+                self.clusters[j].castle = -(i + 1);
+                // self.clusters[j].churchPos = util.copyPair(self.castlePos[i]);
+            }
+        }
+    }
+};
+
+resource.splitByResource = (self, cluster) => {
+    for (let i = 0; i < cluster.mines.length; i++) {
+        if (self.allResources[cluster.mines[i]].type === 0) // karb
+            cluster.karb.push(cluster.mines[i]);
+        else
+            cluster.fuel.push(cluster.mines[i]);
+    }
+};
+
+// for castles only
+resource.findClosestCastle = (self, cluster) => {
+    cluster.closestCastle.dist = 1000000;
+    for (let i = 0; i < self.castlePos.length; i++) {
+        if (util.sqDist(cluster.churchPos, self.castlePos[i]) < cluster.closestCastle.dist) {
+            cluster.closestCastle.castleID = i;
+            cluster.closestCastle.dist = util.sqDist(cluster.churchPos, self.castlePos[i]);
+        }
+    }
+};
+
+// TODO: take distance to enemy castles into account, or distance to center
+// for castles only
+resource.sortByPriority = (a, b) => {
+    if (a.castle !== b.castle)
+        return b.castle - a.castle;
+    if (a.mines.length !== b.mines.length)
+        return b.mines.length - a.mines.length;
+    if (a.karb.length !== b.karb.length)
+        return b.karb.length - a.karb.length;
+    if (a.closestCastle.dist !== b.closestCastle.dist)
+        return a.closestCastle.dist - b.closestCastle.dist;
+    if (a.churchPos.x !== b.churchPos.x)
+        return a.churchPos.x - b.churchPos.x;
+    if (a.churchPos.y !== b.churchPos.y)
+        return a.churchPos.y - b.churchPos.y;
 };
 
 const castle = {};
@@ -1384,10 +1752,14 @@ castle.takeTurn = (self) => {
         self.castlePos[self.castleNumber] = { x: self.me.x, y: self.me.y };
         self.castleTalk(((self.castleNumber + 1) << 6) + self.me.x);
 
+        self.unitInfo = [];
+        for (let i = 0; i <= 4096; i++) {
+            self.unitInfo.push({ type: -1, info: -1 });
+        }
         // other init things
-        self.lastCreated = null;
-        self.prioritySignalQueue = new Deque();
-        self.signalQueue = new Deque();
+        // self.lastCreated = null;
+        // self.prioritySignalQueue = new Deque();
+        // self.signalQueue = new Deque();
         return;
     }
     else if (self.me.turn === 2) {
@@ -1436,81 +1808,93 @@ castle.takeTurn = (self) => {
             self.enemyCastlePos.push(util.reflect(self, self.castlePos[i]));
         }
 
-        self.maxKarbPilgrims = 16;
-        self.maxFuelPilgrims = 16;
+        castleUtil.initAvoidMinesMap(self);
+        resource.mainInit(self);
+        for (let i = 0; i < self.clusters.length; i++) {
+            if (self.clusters[i].castle === self.castleNumber + 1) {
+                self.myCluster = i;
+            }
+        }
+        castleUtil.initClusterProgress(self);
 
-        self.assignedArea = resource.assignAreaToCastles(self);
-        resource.initResourceList(self);
+        // self.castles already exists
+        // self.churches = [];
+        // self.pilgrims = [];
+        // self.crusaders = [];
+        // self.prophets = []; // rangers
+        // self.preachers = []; // mages/tanks
 
-        // self.log("Target karb:");
-        // for (let i = 0; i<self.targetKarb.length; i++){
-        //     self.log(JSON.stringify(self.targetKarb[i]));
-        // }
-        // self.log("Target fuel:");
-        // for (let i = 0; i<self.targetFuel.length; i++){
-        //     self.log(JSON.stringify(self.targetFuel[i]));
-        // }
-
-        self.churches = [];
-        self.karbPilgrims = [];
-        self.fuelPilgrims = [];
-        self.crusaders = [];
-        self.prophets = []; // rangers
-        self.preachers = []; // mages/tanks
-
-        self.desiredKarbPilgrims = Math.min(4, self.targetKarb.length);
-        self.desiredFuelPilgrims = Math.min(4, self.targetFuel.length);
         self.karbBuffer = 60; // TODO: make it dynamic
         self.fuelBuffer = 300; // TODO: make it dynamic
     }
 
-    castleUtil.updateAllUnitLists(self, self.visible);
+    castleUtil.updateUnitInfo(self, self.visible); // add updates to clusterProgress
 
-    let karbGoal = resource.karbGoalStatus(self, self.desiredKarbPilgrims);
-    let fuelGoal = resource.fuelGoalStatus(self, self.desiredFuelPilgrims);
     let visibleEnemies = util.findEnemies(self, self.visible);
-    // self.log("Karb goal: " + JSON.stringify(karbGoal));
-    // self.log("Fuel goal: " + JSON.stringify(fuelGoal));
-
-    self.log(visibleEnemies);
+    let targetCluster = castleUtil.getTargetCluster(self);
 
     if (util.hasSpaceAround(self)) {
-        if (visibleEnemies.length > 0) {
+        if (visibleEnemies.length > 0) { // change to if any cluster is under attack
             self.log("Under attack!");
             visibleEnemies.sort(compareDist);
             if (util.canBuild(self, SPECS.PREACHER)) {
                 return self.buildDefenseMage(visibleEnemies[0]);
             }
         }
-        else if (!karbGoal.reached) {
-            if (karbGoal.canHelp && resource.canMaintainBuffer(self, SPECS.PILGRIM)) {
-                return castleUtil.buildKarbPilgrim(self);
+        else if (targetCluster === self.myCluster) {
+            if (self.clusterProgress[self.myCluster].karbPilgrims < self.clusters[self.myCluster].karb.length) {
+                // build more karb pilgrims
+                if (resource.canMaintainBuffer(self, SPECS.PILGRIM)) {
+                    return castleUtil.buildKarbPilgrim(self); // add way to properly choose mine for pilgrim
+                }
+                else {
+                    // build up more resources before expanding, to maintain buffer
+                    self.log("Saving for karb pilgrim");
+                    signalling.sendSignal(self);
+                    return;
+                }
+            }
+            else if (self.clusterProgress[self.myCluster].fuelPilgrims < self.clusters[self.myCluster].fuel.length) {
+                if (resource.canMaintainBuffer(self, SPECS.PILGRIM)) {
+                    return castleUtil.buildFuelPilgrim(self);
+                }
+                else {
+                    // build up more resources before expanding, to maintain buffer
+                    self.log("Saving for fuel pilgrim");
+                    signalling.sendSignal(self);
+                    return;
+                }
+            } // neededDefenseProphets should take turn number (and previous enemy attacks?) into account
+            else if (self.clusterProgress[self.myCluster].prophets.length < castleUtil.neededDefenseProphets(self)) {
+                if (resource.canMaintainBuffer(self, SPECS.PROPHET)) {
+                    self.log("Should have built defense prophet");
+                    // return castleUtil.buildDefenseProphet(self);
+                }
+                else {
+                    // build up more resources before expanding, to maintain buffer
+                    self.log("Saving for defense mage");
+                    signalling.sendSignal(self);
+                    return;
+                }
             }
             else {
-                // wait for other castle to do it, if !canHelp
-                // or if it's my job, prioritize safety buffer
+                self.log("ERROR! my cluster already has all karb pilgrims, fuel pilgrims, and prophets needed");
                 signalling.sendSignal(self);
                 return;
             }
         }
-        else if (!fuelGoal.reached) {
-            if (fuelGoal.canHelp && resource.canMaintainBuffer(self, SPECS.PILGRIM)) {
-                return castleUtil.buildFuelPilgrim(self);
+        else if (targetCluster !== -1) {
+            // cluster mines are fully occupied by pilgrims and has enough defense. Time to expand
+            if (self.clusterProgress[targetCluster].church === 0) {
+                return castleUtil.buildChurchPilgrim(self, targetCluster);
             }
+            else if (self.clusterProgress[targetCluster].church === -1) ;
             else {
-                // wait for other castle to do it, if !canHelp
-                // or if it's my job, prioritize safety buffer
-                signalling.sendSignal(self);
-                return;
+                self.log("ERROR! target cluster's church status is neither 0 not 1");
             }
         }
-        // else if (self.canMaintainBuffer(SPECS.CRUSADER)) {
-        //     self.log("Building crusader");
-        //     self.sendSignal();
-        //     return self.buildAround(SPECS.CRUSADER);
-        // }
         else {
-            self.lastCreated = null;
+            self.log("Waiting for other castles to finish their cluster or build new churches");
         }
     }
     // self.log("Current number of karb pilgrims: " + self.karbPilgrims.length);
@@ -1523,31 +1907,59 @@ const church = {};
 
 const pilgrimUtil = {};
 
-// TODO: replace self.targetMine with mineIDs
-pilgrimUtil.pilgrimInit = (self) => {
-    self.log("Initializing pilgrim");
-    util.findSymmetry(self);
-    self.enemyCastlePos = [];
-    for (let i = 0; i < self.castles.length; i++) {
-        self.enemyCastlePos.push(util.reflect(self, self.castlePos[i]));
+// TODO: also check for base death
+pilgrimUtil.searchCastlesOrChurches = (self) => {
+    for (let i = 0; i < self.visible.length; i++) {
+        let r = self.visible[i];
+        let alreadyFound = false;
+        let pos = { x: r.x, y: r.y };
+        if (r.unit === SPECS.CASTLE) {
+            if (r.team === self.me.team) {
+                for (let j = 0; j = self.foundCastles.length; j++) {
+                    if (util.pairEq(self.foundCastles[j], pos))
+                        alreadyFound = true;
+                }
+                if (!alreadyFound) {
+                    self.foundCastles.push(pos);
+                    self.foundEnemyCastles.push(util.reflect(self, pos));
+                }
+            }
+            else {
+                for (let j = 0; j = self.foundEnemyCastles.length; j++) {
+                    if (util.pairEq(self.foundEnemyCastles[j], pos))
+                        alreadyFound = true;
+                }
+                if (!alreadyFound) {
+                    self.foundEnemyCastles.push(pos);
+                    self.foundCastles.push(util.reflect(self, pos));
+                }
+            }
+        }
+        else if (r.unit === SPECS.CHURCH) {
+            if (r.team === self.me.team) {
+                for (let j = 0; j = self.foundChurches.length; j++) {
+                    if (util.pairEq(self.foundChurches[j], pos))
+                        alreadyFound = true;
+                }
+                if (!alreadyFound) {
+                    self.foundChurches.push(pos);
+                }
+            }
+            else {
+                for (let j = 0; j = self.foundEnemyChurches.length; j++) {
+                    if (util.pairEq(self.foundEnemyChurches[j], pos))
+                        alreadyFound = true;
+                }
+                if (!alreadyFound) {
+                    self.foundEnemyChurches.push(pos);
+                    // TODO: signal to castles that enemy church exists
+                }
+            }
+        }
     }
-    self.assignedArea = resource.assignAreaToCastles(self);
-    resource.initResourceList(self);
-    // self.log("Target karb right after initializing it");
-    // self.log(self.targetKarb);
+};
 
-    if (self.targetResource === "karb") {
-        self.targetMine = util.copyPair(self.targetKarb[self.targetID].pos);
-    }
-    else {
-        self.targetMine = util.copyPair(self.targetFuel[self.targetID].pos);
-    }
-
-    // self.bfsFromBase = bfs(self.base, self.map);
-    // self.log("Original target mine: " + pairToString(self.targetKarb[self.targetID].pos));
-    // self.log("Target mine: " + pairToString(self.targetMine));
-    // self.bfsFromMine = bfs(self.targetMine, self.map);
-
+pilgrimUtil.initAvoidMinesMap = (self) => {
     self.avoidMinesMap = [];
     for (let x = 0; x < self.map.length; x++)
         self.avoidMinesMap.push(new Array(self.map.length));
@@ -1559,21 +1971,60 @@ pilgrimUtil.pilgrimInit = (self) => {
                 self.avoidMinesMap[y][x] = true;
         }
     }
-    // change when castle is destroyed
-    for (let i = 0; i < self.castlePos.length; i++) {
-        self.avoidMinesMap[self.castlePos[i].y][self.castlePos[i].x] = false;
-        self.avoidMinesMap[self.enemyCastlePos[i].y][self.enemyCastlePos[i].x] = false;
-    }
-    // set false for churches too
-    self.avoidMinesBaseBFS = nav.fullBFS(self.base, self.avoidMinesMap, SPECS.UNITS[self.me.unit].SPEED, true);
-    self.avoidMinesResourceBFS = nav.fullBFS(self.targetMine, self.avoidMinesMap, SPECS.UNITS[self.me.unit].SPEED);
-    self.log("I am a pilgrim that just got initialized");
-    self.log("Target Resource: " + self.targetResource);
-    self.log("Base castle: " + util.pairToString(self.base));
-    self.log("Target Mine: " + util.pairToString(self.targetMine));
-    // self.log("All target karb:");
-    // self.log(self.targetKarb);
+    self.avoidMinesMap[self.base.y][self.base.x] = false;
 };
+
+// TODO: replace self.targetMine with mineIDs
+// pilgrimUtil.pilgrimInit = (self) => {
+//     self.log("Initializing pilgrim");
+//     util.findSymmetry(self);
+//     self.enemyCastlePos = [];
+//     for (let i = 0; i < self.castles.length; i++) {
+//         self.enemyCastlePos.push(util.reflect(self, self.castlePos[i]));
+//     }
+//     self.assignedArea = resource.assignAreaToCastles(self);
+//     resource.initResourceList(self);
+//     // self.log("Target karb right after initializing it");
+//     // self.log(self.targetKarb);
+
+//     if (self.targetResource === "karb") {
+//         self.targetMine = util.copyPair(self.targetKarb[self.targetID].pos);
+//     }
+//     else {
+//         self.targetMine = util.copyPair(self.targetFuel[self.targetID].pos);
+//     }
+
+//     // self.bfsFromBase = bfs(self.base, self.map);
+//     // self.log("Original target mine: " + pairToString(self.targetKarb[self.targetID].pos));
+//     // self.log("Target mine: " + pairToString(self.targetMine));
+//     // self.bfsFromMine = bfs(self.targetMine, self.map);
+
+//     self.avoidMinesMap = [];
+//     for (let x = 0; x < self.map.length; x++)
+//         self.avoidMinesMap.push(new Array(self.map.length));
+//     for (let x = 0; x < self.map.length; x++) {
+//         for (let y = 0; y < self.map.length; y++) {
+//             // must be passable with no mine, except for personal mine
+//             self.avoidMinesMap[y][x] = (self.map[y][x] && !self.karbonite_map[y][x] && !self.fuel_map[y][x]);
+//             if (util.pairEq(self.targetMine, { x: x, y: y }))
+//                 self.avoidMinesMap[y][x] = true;
+//         }
+//     }
+//     // change when castle is destroyed
+//     for (let i = 0; i < self.castlePos.length; i++) {
+//         self.avoidMinesMap[self.castlePos[i].y][self.castlePos[i].x] = false;
+//         self.avoidMinesMap[self.enemyCastlePos[i].y][self.enemyCastlePos[i].x] = false;
+//     }
+//     // set false for churches too
+//     self.avoidMinesBaseBFS = nav.fullBFS(self.base, self.avoidMinesMap, SPECS.UNITS[self.me.unit].SPEED, true);
+//     self.avoidMinesResourceBFS = nav.fullBFS(self.targetMine, self.avoidMinesMap, SPECS.UNITS[self.me.unit].SPEED);
+//     self.log("I am a pilgrim that just got initialized");
+//     self.log("Target Resource: " + self.targetResource);
+//     self.log("Base castle: " + util.pairToString(self.base));
+//     self.log("Target Mine: " + util.pairToString(self.targetMine));
+//     // self.log("All target karb:");
+//     // self.log(self.targetKarb);
+// }
 
 pilgrimUtil.pilgrimDontDoNothing = (self) => {
     self.log("Trying to not do nothing");
@@ -1638,110 +2089,120 @@ pilgrim.takeTurn = (self) => {
     self.log("I have " + self.me.karbonite + " karb and " + self.me.fuel + " fuel");
 
     if (self.me.turn === 1) {
-        self.receivedFirstMessage = false;
-        self.state = "waiting for init messages";
+        resource.mainInit(self);
+        self.foundCastles = [];
+        self.foundChurches = [];
+        self.foundEnemyCastles = [];
+        self.foundEnemyChurches = [];
+        // self.baseInitialized = false;
     }
 
-    if (self.state === "waiting for init messages") {
-        self.log("Pilgrim state: " + self.state);
+    pilgrimUtil.searchCastlesOrChurches(self);
+
+    if (self.me.turn === 1) {
         let receivedMessage = false;
         for (let i = 0; i < self.visible.length; i++) {
             let r = self.visible[i];
-            if (r.team === self.me.team && r.unit === SPECS.CASTLE && self.isRadioing(r)) {
-                let hash = r.signal;
-                if (hash >> 15) {
-                    let shiftHash = (hash >> 12) & ((1 << 3) - 1);
-                    let shift = util.unhashShift(shiftHash);
-                    if (util.pairEq(util.subtractPair(self.loc, { x: r.x, y: r.y }), shift)) {
-                        // signal is meant for me!
-                        self.log("I got a message!");
-                        receivedMessage = true;
-                        if (!self.receivedFirstMessage) {
-                            self.log("self is my first message");
-                            self.receivedFirstMessage = true;
+            if (r.team === self.me.team
+                && (r.unit === SPECS.CASTLE || r.unit === SPECS.CHURCH)
+                && self.isRadioing(r) && (r.signal >> 15)
+                && util.sqDist(self.loc, { x: r.x, y: r.y })) {
+                // signal is meant for me!
+                self.log("I got a message!");
+                receivedMessage = true;
 
-                            self.castles = new Array((hash >> 10) & ((1 << 2) - 1));
-                            self.castlePos = new Array(self.castles.length);
-                            self.baseCastleNumber = ((hash >> 8) & ((1 << 2) - 1)) - 1;
-                            self.castles[self.baseCastleNumber] = r.id;
-                            self.castlePos[self.baseCastleNumber] = { x: r.x, y: r.y };
-
-                            self.log("Known castle locations:");
-                            self.log(self.castlePos);
-
-                            self.base = { x: r.x, y: r.y };
-                            self.churches = new Array((hash >> 6) & ((1 << 2) - 1)); // TODO: don't send church info
-                            if (hash & (1 << 4))
-                                self.targetResource = "fuel";
-                            else
-                                self.targetResource = "karb";
-                            self.targetID = hash & ((1 << 4) - 1);
-
-                            // let other castles know that you're a newly created robot
-                            // 7th bit shows that you're new, 5-6 shows your type, 0-4 shows your job
-                            self.castleTalk((1 << 7) | ((self.me.unit - 2) << 5) | (hash & ((1 << 5) - 1)));
-
-                            if (self.castles.length === 1) {
-                                pilgrimUtil.pilgrimInit(self);
-                                self.state = "going to mine"; // can start moving on the same turn
-                            }
-                            else {
-                                self.log("Must wait for more init messages");
-                                return pilgrimUtil.pilgrimDontDoNothing(self);
-                            }
-                        }
-                        else {
-                            for (let j = 0; j < self.castles.length; j++) {
-                                if (self.castles[j] === undefined) {
-                                    self.castles[j] = r.id;
-                                    self.castlePos[j] = { x: (r.signal >> 6) & ((1 << 6) - 1), y: r.signal & ((1 << 6) - 1) };
-                                    break;
-                                }
-                            }
-                            self.log("Known castle locations:");
-                            self.log(self.castlePos);
-
-                            for (let j = 0; j < self.castles.length; j++) {
-                                if (self.castles[j] === undefined) {
-                                    self.log("Must wait for more init messages");
-                                    return pilgrimUtil.pilgrimDontDoNothing(self);
-                                }
-                            }
-                            pilgrimUtil.pilgrimInit(self);
-                            self.state = "going to mine"; // can start moving on the same turn
-                        }
-                    }
+                let message = r.signal - (1 << 15);
+                if (message < self.allResources.length) { // resource pilgrim
+                    self.targetMineID = message;
+                    self.targetResource = self.allResources[self.targetMineID].type;
+                    self.targetMinePos = self.allResources[message].pos;
+                    self.myClusterID = self.allResources[message].cluster;
+                    self.base = { x: r.x, y: r.y };
+                    self.state = "going to mine";
                 }
+                else {
+                    self.myClusterID = message - self.allResources.length;
+                    self.targetMineID = self.clusters[self.myClusterID].karb[0];
+                    self.targetResource = 0;
+                    self.targetMinePos = self.allResources[self.targetMineID].pos;
+                    self.base = self.clusters[self.myClusterID].churchPos;
+                    self.state = "going to build church";
+                }
+                self.castleTalk(message);
+                util.findSymmetry(self); // why does the pilgrim need this?
+                pilgrimUtil.initAvoidMinesMap(self);
+                self.bfsFromMine = nav.fullBFS(self.targetMinePos, self.avoidMinesMap, SPECS.UNITS[self.me.unit].SPEED);
+                self.bfsFromBase = nav.fullBFS(self.base, self.avoidMinesMap, SPECS.UNITS[self.me.unit].SPEED, true);
+                self.log("I am a pilgrim that just got initialized");
+                self.log("Target Resource: " + self.targetResource);
+                self.log("Base castle or church: " + util.pairToString(self.base));
+                self.log("Target Mine: " + util.pairToString(self.targetMinePos));
             }
         }
         if (!receivedMessage) {
-            self.log("No message received, state is still " + self.state);
-            return pilgrimUtil.pilgrimDontDoNothing(self);
+            self.log("ERROR! I'm a new pilgrim that didn't get an init message");
+        }
+    }
+
+    if (self.state === "going to build church") {
+        self.log("Pilgrim state: " + self.state);
+        if (util.sqDist(self.loc, self.base) <= 2) {
+            self.state = "building church";
+            self.log("Already arrived at build location, state switching to " + self.state);
+        }
+        else {
+            let chosenMove = nav.move(self.loc, self.bfsFromBase, self.map, self.robotMap, SPECS.UNITS[self.me.unit].SPEED);
+            self.log("Move: " + util.pairToString(chosenMove));
+            if (util.pairEq(chosenMove, { x: 0, y: 0 })) {
+                // TODO: find solution
+                self.log("New move: " + util.pairToString(chosenMove));
+                if (util.pairEq(chosenMove, { x: 0, y: 0 })) {
+                    // TODO: pilgrim is stuck, turn stationary robots into impassable
+                    return pilgrimUtil.pilgrimDontDoNothing(self);
+                }
+            }
+            if (util.sqDist(util.addPair(self.loc, chosenMove), self.base) <= 2 && util.enoughFuelToMove(self, chosenMove)) {
+                self.state = "building church";
+                self.log("Will arrive at build location next turn, state switching to " + self.state);
+            }
+            return self.move(chosenMove.x, chosenMove.y);
+        }
+    }
+
+    if (self.state === "building church") { // combine with above state?
+        if (util.sqDist(self.loc, self.base) > 2) {
+            self.log("ERROR! state is " + self.state + " but not currently adjacent to build location");
+            self.state = "going to mine";
+            // TODO: set mine as closest karb
+        }
+        else {
+            self.log("Building church at " + util.pairToString(self.base));
+            let shift = util.subtractPair(self.base, self.loc);
+            signalling.pilgrimToNewChurch(self, self.targetResource, shift);
+            self.state = "going to mine";
+            return self.buildUnit(SPECS.CHURCH, shift.x, shift.y);
         }
     }
 
     if (self.state === "going to mine") {
         self.log("Pilgrim state: " + self.state);
-        if (util.pairEq(self.loc, self.targetMine)) {
+        if (util.pairEq(self.loc, self.targetMinePos)) {
             self.state = "mining"; // can start mining on the same turn
             self.log("Already arrived at mine, state changed to " + self.state);
         }
         else {
-            // let chosenMove = move(self.loc, self.bfsFromMine, self.map, self.getVisibleRobotMap(), SPECS.UNITS[self.me.unit].SPEED);
-            let chosenMove = nav.move(self.loc, self.avoidMinesResourceBFS, self.map, self.robotMap, SPECS.UNITS[self.me.unit].SPEED);
+            let chosenMove = nav.move(self.loc, self.bfsFromMine, self.map, self.robotMap, SPECS.UNITS[self.me.unit].SPEED);
             self.log("Move: " + util.pairToString(chosenMove));
             if (util.pairEq(chosenMove, { x: 0, y: 0 })) {
-                // chosenMove = move(self.loc, self.bfsFromMine, self.map, self.getVisibleRobotMap(), SPECS.UNITS[self.me.unit].SPEED);
+                // TODO: alternate move
                 self.log("New move: " + util.pairToString(chosenMove));
                 if (util.pairEq(chosenMove, { x: 0, y: 0 })) {
-                    // self.lastMoveNothing = true; // stuck
                     // TODO: signal when stuck
                     return pilgrimUtil.pilgrimDontDoNothing(self);
                 }
             }
-            // self.lastMoveNothing = false;
             // TODO: make pilgrims follow fuel buffer
-            if (util.pairEq(util.addPair(self.loc, chosenMove), self.targetMine)
+            if (util.pairEq(util.addPair(self.loc, chosenMove), self.targetMinePos)
                 && util.enoughFuelToMove(self, chosenMove))
                 self.state = "mining";
             return self.move(chosenMove.x, chosenMove.y);
@@ -1752,7 +2213,7 @@ pilgrim.takeTurn = (self) => {
         self.log("Pilgrim state: " + self.state);
         if (self.fuel >= SPECS.MINE_FUEL_COST) {
             // self.lastMoveNothing = false;
-            if (self.targetResource === "karb") {
+            if (self.targetResource === 0) { // karb
                 if (self.me.karbonite + SPECS.KARBONITE_YIELD >= SPECS.UNITS[self.me.unit].KARBONITE_CAPACITY) {
                     self.log("Storage will be full next round, swiching state to go to base");
                     self.state = "going to base";
@@ -1775,24 +2236,38 @@ pilgrim.takeTurn = (self) => {
     }
 
     if (self.state === "going to base") {
+        // if (!self.baseInitialized) {
+        //     let minDist = 1000000;
+        //     for (let i = 0; i < self.foundCastles.length; i++) {
+        //         if (util.sqDist(self.foundCastles[i], self.targetMinePos) < minDist) {
+        //             minDist = util.sqDist(self.foundCastles[i], self.targetMinePos);
+        //             self.base = self.foundCastles[i];
+        //         }
+        //     }
+        //     for (let i = 0; i < self.foundChurches.length; i++) {
+        //         if (util.sqDist(self.foundChurches[i], self.targetMinePos) < minDist) {
+        //             minDist = util.sqDist(self.foundChurches[i], self.targetMinePos);
+        //             self.base = self.foundChurches[i];
+        //         }
+        //     }
+        //     self.baseInitialized = true;
+        // }
         self.log("Pilgrim state: " + self.state);
         if (util.sqDist(self.loc, self.base) <= 2) {
             self.state = "depositing";
             self.log("Already arrived at base, state switching to " + self.state);
         }
         else {
-            let chosenMove = nav.move(self.loc, self.avoidMinesBaseBFS, self.map, self.robotMap, SPECS.UNITS[self.me.unit].SPEED);
-            // let chosenMove = move(self.loc, self.bfsFromBase, self.map, self.getVisibleRobotMap(), SPECS.UNITS[self.me.unit].SPEED, self.lastMoveNothing);
+            let chosenMove = nav.move(self.loc, self.bfsFromBase, self.map, self.robotMap, SPECS.UNITS[self.me.unit].SPEED);
             self.log("Move: " + util.pairToString(chosenMove));
             if (util.pairEq(chosenMove, { x: 0, y: 0 })) {
-                // chosenMove = move(self.loc, self.bfsFromBase, self.map, self.getVisibleRobotMap(), SPECS.UNITS[self.me.unit].SPEED);
+                // TODO: alternate move
                 self.log("New move: " + util.pairToString(chosenMove));
                 if (util.pairEq(chosenMove, { x: 0, y: 0 })) {
-                    // self.lastMoveNothing = true;
+                    // TODO: handle stuck pilgrims
                     return pilgrimUtil.pilgrimDontDoNothing(self);
                 }
             }
-            // self.lastMoveNothing = false;
             if (util.sqDist(util.addPair(self.loc, chosenMove), self.base) <= 2 && util.enoughFuelToMove(self, chosenMove)) {
                 self.state = "depositing";
                 self.log("Will arrive at base next turn, state switching to " + self.state);
@@ -1805,7 +2280,6 @@ pilgrim.takeTurn = (self) => {
         self.log("Pilgrim state: " + self.state);
         if (self.me.karbonite > 0 || self.me.fuel > 0) {
             self.log("Depositing resources at base");
-            // self.lastMoveNothing = false;
             self.state = "going to mine";
             self.log("State for next round changed to " + self.state);
             return self.give(self.base.x - self.loc.x, self.base.y - self.loc.y, self.me.karbonite, self.me.fuel);
@@ -1981,7 +2455,7 @@ preacher.takeTurn = (self) => {
                 for (let dx2 = -1; dx2 <= 1; dx2++) {
                     for (let dy2 = -1; dy2 <= 1; dy2++) {
                         let splashed = util.addPair(targetSquare, { x: dx2, y: dy2 });
-                        if (!util.inGrid(splashed, self.map.length))
+                        if (!util.inGrid(splashed, self.map))
                             continue;
                         let id = self.robotMap[splashed.y][splashed.x];
                         if (id > 0) {
@@ -2046,7 +2520,12 @@ preacher.takeTurn = (self) => {
 // clear && bc19compile -d Churches_V2 -o debug.js -f && bc19run --bc debug.js --rc debug.js
 // 3 castle test seed: 1505486586
 // times out: 1909424986 (pilgrim bfs)
-// only makes two pilgrims: 1298989386
+// only makes two pilgrims: 1298989386. Distance of mines from you and enemy are equal because pilgrim jump is ignored.
+// Good eco teams: big red battlecode, oak's last disciple, vvvvv, knights of cowmelot, deus vult, panda lovers
+
+// TODO: replace array.push with array[i] = x to optimize code
+// clique with one resource: 1482125857
+// remove edge (-1, -1): 1482125857
 
 class MyRobot extends BCAbstractRobot {
     constructor() {
@@ -2060,7 +2539,7 @@ class MyRobot extends BCAbstractRobot {
         this.log("Time remaining: " + this.me.time);
         this.visible = this.getVisibleRobots();
         this.robotMap = this.getVisibleRobotMap();
-        this.alreadySignaled = false;
+        this.alreadySignalled = false;
         this.loc = { x: this.me.x, y: this.me.y };
 
         if (this.type === undefined) {

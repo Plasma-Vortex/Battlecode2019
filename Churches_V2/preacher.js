@@ -80,7 +80,7 @@ preacher.takeTurn = (self) => {
                 for (let dx2 = -1; dx2 <= 1; dx2++) {
                     for (let dy2 = -1; dy2 <= 1; dy2++) {
                         let splashed = util.addPair(targetSquare, { x: dx2, y: dy2 });
-                        if (!util.inGrid(splashed, self.map.length))
+                        if (!util.inGrid(splashed, self.map))
                             continue;
                         let id = self.robotMap[splashed.y][splashed.x];
                         if (id > 0) {
