@@ -3,15 +3,20 @@ import util from './util.js';
 import castleUtil from './castleUtil.js';
 import resource from './resource.js';
 import signalling from './signalling.js';
-import Deque from './FastQueue.js';
 
 const castle = {};
 
 castle.takeTurn = (self) => {
     self.loc = { x: self.me.x, y: self.me.y }; // change to let loc
     self.log("Castle Position: " + util.pairToString(self.loc));
+    self.log("Team karb: " + self.karbonite + ", team fuel: " + self.fuel);
 
     if (self.me.turn === 1) {
+        self.unitInfo = new Array(4097);
+        for (let i = 0; i <= 4096; i++) {
+            self.unitInfo[i] = { type: -1, info: -1 };
+        }
+
         self.castles = [];
         self.castlePos = [];
         self.churchPos = [];
@@ -31,17 +36,17 @@ castle.takeTurn = (self) => {
                     self.castles[rCastleNumber] = r.id;
                     self.castlePos[rCastleNumber].x = r.castle_talk & ((1 << 6) - 1);
                     self.castleNumber++;
+                    self.unitInfo[r.id].type = SPECS.CASTLE;
+                    self.unitInfo[r.id].info = rCastleNumber;
                 }
             }
         }
         self.castles[self.castleNumber] = self.me.id;
         self.castlePos[self.castleNumber] = { x: self.me.x, y: self.me.y };
         self.castleTalk(((self.castleNumber + 1) << 6) + self.me.x);
+        self.unitInfo[self.me.id].type = SPECS.CASTLE;
+        self.unitInfo[self.me.id].info = self.castleNumber;
 
-        self.unitInfo = [];
-        for (let i = 0; i <= 4096; i++) {
-            self.unitInfo.push({ type: -1, info: -1 });
-        }
         // other init things
         // self.lastCreated = null;
         // self.prioritySignalQueue = new Deque();
@@ -60,6 +65,8 @@ castle.takeTurn = (self) => {
                     else { // r's first signal is x coordinate
                         self.castles[rCastleNumber] = r.id;
                         self.castlePos[rCastleNumber].x = r.castle_talk & ((1 << 6) - 1);
+                        self.unitInfo[r.id].type = SPECS.CASTLE;
+                        self.unitInfo[r.id].info = rCastleNumber;
                     }
                 }
             }
@@ -94,7 +101,7 @@ castle.takeTurn = (self) => {
             self.enemyCastlePos.push(util.reflect(self, self.castlePos[i]));
         }
 
-        castleUtil.initAvoidMinesMap(self);
+        util.initAvoidMinesMap(self);
         resource.mainInit(self);
         for (let i = 0; i < self.clusters.length; i++) {
             if (self.clusters[i].castle === self.castleNumber + 1) {
@@ -102,6 +109,8 @@ castle.takeTurn = (self) => {
             }
         }
         castleUtil.initClusterProgress(self);
+        castleUtil.initDefensePositions(self);
+        castleUtil.initAttackPositions(self);
 
         // self.castles already exists
         // self.churches = [];
@@ -110,71 +119,83 @@ castle.takeTurn = (self) => {
         // self.prophets = []; // rangers
         // self.preachers = []; // mages/tanks
 
-        self.karbBuffer = 60; // TODO: make it dynamic
-        self.fuelBuffer = 300; // TODO: make it dynamic
+        self.karbBuffer = 30; // TODO: make it dynamic
+        self.fuelBuffer = 200; // TODO: make it dynamic
     }
 
-    castleUtil.updateUnitInfo(self, self.visible); // add updates to clusterProgress
+    castleUtil.updateUnitInfo(self, self.visible); // TODO: add updates to clusterProgress
+    castleUtil.updateChurchesInProgress(self);
 
     let visibleEnemies = util.findEnemies(self, self.visible);
+    visibleEnemies.sort(util.compareDist);
     let targetCluster = castleUtil.getTargetCluster(self);
+
+    self.log("Cluster Progress:");
+    for (let i = 0; i < self.clusters.length; i++)
+        self.log(self.clusterProgress[i]);
+    self.log("Target Cluster: " + targetCluster);
 
     if (util.hasSpaceAround(self)) {
         if (visibleEnemies.length > 0) { // change to if any cluster is under attack
             self.log("Under attack!");
-            visibleEnemies.sort(compareDist);
             if (util.canBuild(self, SPECS.PREACHER)) {
-                return self.buildDefenseMage(visibleEnemies[0]);
+                return castleUtil.buildDefenseMage(self, visibleEnemies[0]);
+            }
+            else if (util.canAttack(self, util.addPair(self.loc, visibleEnemies[0].relPos))) {
+                self.attack(visibleEnemies[0].relPos.x, visibleEnemies[0].relPos.y);
             }
         }
         else if (targetCluster === self.myCluster) {
             if (self.clusterProgress[self.myCluster].karbPilgrims < self.clusters[self.myCluster].karb.length) {
                 // build more karb pilgrims
-                if (resource.canMaintainBuffer(self, SPECS.PILGRIM)) {
+                if (castleUtil.canMaintainBuffer(self, SPECS.PILGRIM)) {
                     return castleUtil.buildKarbPilgrim(self); // add way to properly choose mine for pilgrim
                 }
                 else {
                     // build up more resources before expanding, to maintain buffer
                     self.log("Saving for karb pilgrim");
-                    signalling.sendSignal(self);
                     return;
                 }
             }
             else if (self.clusterProgress[self.myCluster].fuelPilgrims < self.clusters[self.myCluster].fuel.length) {
-                if (resource.canMaintainBuffer(self, SPECS.PILGRIM)) {
+                if (castleUtil.canMaintainBuffer(self, SPECS.PILGRIM)) {
                     return castleUtil.buildFuelPilgrim(self);
                 }
                 else {
                     // build up more resources before expanding, to maintain buffer
                     self.log("Saving for fuel pilgrim");
-                    signalling.sendSignal(self);
                     return;
                 }
             } // neededDefenseProphets should take turn number (and previous enemy attacks?) into account
             else if (self.clusterProgress[self.myCluster].prophets.length < castleUtil.neededDefenseProphets(self)) {
-                if (resource.canMaintainBuffer(self, SPECS.PROPHET)) {
+                if (castleUtil.canMaintainBuffer(self, SPECS.PROPHET)) {
                     self.log("Should have built defense prophet");
                     // return castleUtil.buildDefenseProphet(self);
                 }
                 else {
                     // build up more resources before expanding, to maintain buffer
                     self.log("Saving for defense mage");
-                    signalling.sendSignal(self);
                     return;
                 }
             }
             else {
                 self.log("ERROR! my cluster already has all karb pilgrims, fuel pilgrims, and prophets needed");
-                signalling.sendSignal(self);
+                self.clusterProgress[self.myCluster].done = true;
                 return;
             }
         }
         else if (targetCluster !== -1) {
             // cluster mines are fully occupied by pilgrims and has enough defense. Time to expand
             if (self.clusterProgress[targetCluster].church === 0) {
-                return castleUtil.buildChurchPilgrim(self, targetCluster);
+                if (castleUtil.canMaintainBuffer(self, SPECS.CHURCH)) {
+                    return castleUtil.buildChurchPilgrim(self, targetCluster);
+                }
+                else {
+                    self.log("Saving for a church at cluster " + targetCluster);
+                }
             }
             else if (self.clusterProgress[targetCluster].church === -1) {
+                self.log("Saving up for attack on cluster " + targetCluster);
                 // save up units for attack
             }
             else {
@@ -183,12 +204,13 @@ castle.takeTurn = (self) => {
         }
         else {
             self.log("Waiting for other castles to finish their cluster or build new churches");
+            if (visibleEnemies.length > 0) {
+                if (util.canAttack(self, util.addPair(self.loc, visibleEnemies[0].relPos))) {
+                    self.attack(visibleEnemies[0].relPos.x, visibleEnemies[0].relPos.y);
+                }
+            }
         }
     }
-    // self.log("Current number of karb pilgrims: " + self.karbPilgrims.length);
-    // self.log("Current number of fuel pilgrims: " + self.fuelPilgrims.length);
-
-    signalling.sendSignal(self);
 };
 
 

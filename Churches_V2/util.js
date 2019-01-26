@@ -85,11 +85,17 @@ util.compareDist = (a, b) => {
         return b.unitType - a.unitType;
 }
 
-util.compareDistToPoint = (pt) => {
+util.sortByDistToPoint = (pt) => {
     return function (a, b) {
         return util.sqDist(a, pt) - util.sqDist(b, pt);
-    };
+    }
 }
+
+// util.compareDistToPoint = (pt) => {
+//     return function (a, b) {
+//         return util.sqDist(a, pt) - util.sqDist(b, pt);
+//     };
+// }
 
 util.copyPair = (p) => {
     return { x: p.x, y: p.y };
@@ -223,6 +229,51 @@ util.removeEdge = (adj, cc) => {
         }
     }
     return bestPair;
+}
+
+util.initMaps = (self) => {
+    self.avoidMinesMap = new Array(self.map.length);
+    self.noMineRobotMap = new Array(self.map.length);
+    for (let i = 0; i < self.map.length; i++) {
+        self.avoidMinesMap[i] = (new Array(self.map.length));
+        self.noMineRobotMap[i] = (new Array(self.map.length));
+    }
+    for (let x = 0; x < self.map.length; x++) {
+        for (let y = 0; y < self.map.length; y++) {
+            self.avoidMinesMap[y][x] = (self.map[y][x] && !self.karbonite_map[y][x] && !self.fuel_map[y][x]);
+            self.noMineRobotMap[y][x] = (self.map[y][x] && !self.karbonite_map[y][x] && !self.fuel_map[y][x]);
+        }
+    }
+}
+
+util.updateNoRobotMap = (self) => {
+    let r = Math.ceil(Math.sqrt(SPECS.UNITS[self.me.unit].VISION_RADIUS));
+    for (let x = Math.max(0, self.loc.x - r); x <= Math.min(self.map.length - 1, self.loc.x + r); x++) {
+        for (let y = Math.max(0, self.loc.y - r); y <= Math.min(self.map.length - 1, self.loc.y + r); y++) {
+            if (util.sqDist(self.loc, { x: x, y: y }) <= SPECS.UNITS[self.me.unit].VISION_RADIUS) {
+                self.noMineRobotMap[y][x] = self.avoidMinesMap[y][x] && (self.robotMap[y][x] === 0);
+            }
+        }
+    }
+}
+
+// choose best starting placement around castle
+util.closestAdjacent = (self, destination) => {
+    let minDist = 1000000;
+    let bestShift = { x: -100, y: -100 };
+    for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+            let shift = { x: dx, y: dy };
+            let pos = util.addPair(self.loc, shift);
+            if (util.empty(pos, self.map, self.robotMap)) {
+                if (util.sqDist(pos, destination) < minDist) {
+                    minDist = util.sqDist(pos, destination);
+                    bestShift = shift;
+                }
+            }
+        }
+    }
+    return bestShift;
 }
 
 export default util;

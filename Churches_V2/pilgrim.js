@@ -7,18 +7,23 @@ import signalling from './signalling.js';
 
 const pilgrim = {};
 
+
 pilgrim.takeTurn = (self) => {
     self.loc = { x: self.me.x, y: self.me.y };
     self.log("Pilgrim Position: " + util.pairToString(self.loc));
     self.log("I have " + self.me.karbonite + " karb and " + self.me.fuel + " fuel");
 
     if (self.me.turn === 1) {
+        util.initAvoidMinesMap(self);
         resource.mainInit(self);
+        self.log("self.clusters:");
+        for (let i = 0; i < self.clusters.length; i++)
+            self.log(self.clusters[i]);
         self.foundCastles = [];
         self.foundChurches = [];
         self.foundEnemyCastles = [];
         self.foundEnemyChurches = [];
-        // self.baseInitialized = false;
+        self.usingNoRobotMap = false;
     }
 
     pilgrimUtil.searchCastlesOrChurches(self);
@@ -30,7 +35,7 @@ pilgrim.takeTurn = (self) => {
             if (r.team === self.me.team
                 && (r.unit === SPECS.CASTLE || r.unit === SPECS.CHURCH)
                 && self.isRadioing(r) && (r.signal >> 15)
-                && util.sqDist(self.loc, { x: r.x, y: r.y })) {
+                && util.sqDist(self.loc, { x: r.x, y: r.y }) <= 2) {
                 // signal is meant for me!
                 self.log("I got a message!");
                 receivedMessage = true;
@@ -43,6 +48,9 @@ pilgrim.takeTurn = (self) => {
                     self.myClusterID = self.allResources[message].cluster;
                     self.base = { x: r.x, y: r.y };
                     self.state = "going to mine";
+                    if (r.unit === SPECS.CHURCH){
+                        signalling.newPilgrimExists(self, self.targetMineID, 10);
+                    }
                 }
                 else {
                     self.myClusterID = message - self.allResources.length;
@@ -52,9 +60,11 @@ pilgrim.takeTurn = (self) => {
                     self.base = self.clusters[self.myClusterID].churchPos;
                     self.state = "going to build church";
                 }
-                self.castleTalk(message);
+                self.castleTalk((1 << 7) + message);
                 util.findSymmetry(self); // why does the pilgrim need this?
-                pilgrimUtil.initAvoidMinesMap(self);
+                // update avoid mines map
+                self.avoidMinesMap[self.targetMinePos.y][self.targetMinePos.x] = true;
+                self.avoidMinesMap[self.base.y][self.base.x] = false;
                 self.bfsFromMine = nav.fullBFS(self.targetMinePos, self.avoidMinesMap, SPECS.UNITS[self.me.unit].SPEED);
                 self.bfsFromBase = nav.fullBFS(self.base, self.avoidMinesMap, SPECS.UNITS[self.me.unit].SPEED, true);
                 self.log("I am a pilgrim that just got initialized");
@@ -68,7 +78,10 @@ pilgrim.takeTurn = (self) => {
         }
     }
 
+    // util.updateNoRobotMap(self);
+
     if (self.state === "going to build church") {
+        // TODO: add check to see if desired church is already built
         self.log("Pilgrim state: " + self.state);
         if (util.sqDist(self.loc, self.base) <= 2) {
             self.state = "building church";
@@ -78,7 +91,6 @@ pilgrim.takeTurn = (self) => {
             let chosenMove = nav.move(self.loc, self.bfsFromBase, self.map, self.robotMap, SPECS.UNITS[self.me.unit].SPEED);
             self.log("Move: " + util.pairToString(chosenMove));
             if (util.pairEq(chosenMove, { x: 0, y: 0 })) {
-                // TODO: find solution
                 self.log("New move: " + util.pairToString(chosenMove));
                 if (util.pairEq(chosenMove, { x: 0, y: 0 })) {
                     // TODO: pilgrim is stuck, turn stationary robots into impassable
@@ -100,11 +112,18 @@ pilgrim.takeTurn = (self) => {
             // TODO: set mine as closest karb
         }
         else {
-            self.log("Building church at " + util.pairToString(self.base));
-            let shift = util.subtractPair(self.base, self.loc);
-            signalling.pilgrimToNewChurch(self, self.targetResource, shift);
-            self.state = "going to mine";
-            return self.buildUnit(SPECS.CHURCH, shift.x, shift.y);
+            if (util.empty(self.base, self.map, self.robotMap) && util.canBuild(self, SPECS.CHURCH)){
+                self.log("Building church at " + util.pairToString(self.base));
+                let shift = util.subtractPair(self.base, self.loc);
+                self.castleTalk((1 << 7) + self.targetMineID);
+                signalling.pilgrimToNewChurch(self, self.targetMineID, shift);
+                self.state = "going to mine";
+                return self.buildUnit(SPECS.CHURCH, shift.x, shift.y);
+            }
+            else {
+                self.log("Saving up for church");
+                return pilgrimUtil.pilgrimDontDoNothing(self);
+            }
         }
     }
 
@@ -136,7 +155,6 @@ pilgrim.takeTurn = (self) => {
     if (self.state === "mining") {
         self.log("Pilgrim state: " + self.state);
         if (self.fuel >= SPECS.MINE_FUEL_COST) {
-            // self.lastMoveNothing = false;
             if (self.targetResource === 0) { // karb
                 if (self.me.karbonite + SPECS.KARBONITE_YIELD >= SPECS.UNITS[self.me.unit].KARBONITE_CAPACITY) {
                     self.log("Storage will be full next round, swiching state to go to base");
@@ -154,7 +172,6 @@ pilgrim.takeTurn = (self) => {
         }
         else {
             self.log("Not enough fuel to mine");
-            // self.lastMoveNothing = true;
             return pilgrimUtil.pilgrimDontDoNothing(self);
         }
     }

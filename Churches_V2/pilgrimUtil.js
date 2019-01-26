@@ -12,7 +12,7 @@ pilgrimUtil.searchCastlesOrChurches = (self) => {
         let pos = { x: r.x, y: r.y };
         if (r.unit === SPECS.CASTLE) {
             if (r.team === self.me.team) {
-                for (let j = 0; j = self.foundCastles.length; j++) {
+                for (let j = 0; j < self.foundCastles.length; j++) {
                     if (util.pairEq(self.foundCastles[j], pos))
                         alreadyFound = true;
                 }
@@ -22,7 +22,7 @@ pilgrimUtil.searchCastlesOrChurches = (self) => {
                 }
             }
             else {
-                for (let j = 0; j = self.foundEnemyCastles.length; j++) {
+                for (let j = 0; j < self.foundEnemyCastles.length; j++) {
                     if (util.pairEq(self.foundEnemyCastles[j], pos))
                         alreadyFound = true;
                 }
@@ -34,7 +34,7 @@ pilgrimUtil.searchCastlesOrChurches = (self) => {
         }
         else if (r.unit === SPECS.CHURCH) {
             if (r.team === self.me.team) {
-                for (let j = 0; j = self.foundChurches.length; j++) {
+                for (let j = 0; j < self.foundChurches.length; j++) {
                     if (util.pairEq(self.foundChurches[j], pos))
                         alreadyFound = true;
                 }
@@ -43,7 +43,7 @@ pilgrimUtil.searchCastlesOrChurches = (self) => {
                 }
             }
             else {
-                for (let j = 0; j = self.foundEnemyChurches.length; j++) {
+                for (let j = 0; j < self.foundEnemyChurches.length; j++) {
                     if (util.pairEq(self.foundEnemyChurches[j], pos))
                         alreadyFound = true;
                 }
@@ -55,73 +55,6 @@ pilgrimUtil.searchCastlesOrChurches = (self) => {
         }
     }
 }
-
-pilgrimUtil.initAvoidMinesMap = (self) => {
-    self.avoidMinesMap = [];
-    for (let x = 0; x < self.map.length; x++)
-        self.avoidMinesMap.push(new Array(self.map.length));
-    for (let x = 0; x < self.map.length; x++) {
-        for (let y = 0; y < self.map.length; y++) {
-            // must be passable with no mine, except for personal mine
-            self.avoidMinesMap[y][x] = (self.map[y][x] && !self.karbonite_map[y][x] && !self.fuel_map[y][x]);
-            if (util.pairEq(self.targetMine, { x: x, y: y }))
-                self.avoidMinesMap[y][x] = true;
-        }
-    }
-    self.avoidMinesMap[self.base.y][self.base.x] = false;
-}
-
-// TODO: replace self.targetMine with mineIDs
-// pilgrimUtil.pilgrimInit = (self) => {
-//     self.log("Initializing pilgrim");
-//     util.findSymmetry(self);
-//     self.enemyCastlePos = [];
-//     for (let i = 0; i < self.castles.length; i++) {
-//         self.enemyCastlePos.push(util.reflect(self, self.castlePos[i]));
-//     }
-//     self.assignedArea = resource.assignAreaToCastles(self);
-//     resource.initResourceList(self);
-//     // self.log("Target karb right after initializing it");
-//     // self.log(self.targetKarb);
-
-//     if (self.targetResource === "karb") {
-//         self.targetMine = util.copyPair(self.targetKarb[self.targetID].pos);
-//     }
-//     else {
-//         self.targetMine = util.copyPair(self.targetFuel[self.targetID].pos);
-//     }
-
-//     // self.bfsFromBase = bfs(self.base, self.map);
-//     // self.log("Original target mine: " + pairToString(self.targetKarb[self.targetID].pos));
-//     // self.log("Target mine: " + pairToString(self.targetMine));
-//     // self.bfsFromMine = bfs(self.targetMine, self.map);
-
-//     self.avoidMinesMap = [];
-//     for (let x = 0; x < self.map.length; x++)
-//         self.avoidMinesMap.push(new Array(self.map.length));
-//     for (let x = 0; x < self.map.length; x++) {
-//         for (let y = 0; y < self.map.length; y++) {
-//             // must be passable with no mine, except for personal mine
-//             self.avoidMinesMap[y][x] = (self.map[y][x] && !self.karbonite_map[y][x] && !self.fuel_map[y][x]);
-//             if (util.pairEq(self.targetMine, { x: x, y: y }))
-//                 self.avoidMinesMap[y][x] = true;
-//         }
-//     }
-//     // change when castle is destroyed
-//     for (let i = 0; i < self.castlePos.length; i++) {
-//         self.avoidMinesMap[self.castlePos[i].y][self.castlePos[i].x] = false;
-//         self.avoidMinesMap[self.enemyCastlePos[i].y][self.enemyCastlePos[i].x] = false;
-//     }
-//     // set false for churches too
-//     self.avoidMinesBaseBFS = nav.fullBFS(self.base, self.avoidMinesMap, SPECS.UNITS[self.me.unit].SPEED, true);
-//     self.avoidMinesResourceBFS = nav.fullBFS(self.targetMine, self.avoidMinesMap, SPECS.UNITS[self.me.unit].SPEED);
-//     self.log("I am a pilgrim that just got initialized");
-//     self.log("Target Resource: " + self.targetResource);
-//     self.log("Base castle: " + util.pairToString(self.base));
-//     self.log("Target Mine: " + util.pairToString(self.targetMine));
-//     // self.log("All target karb:");
-//     // self.log(self.targetKarb);
-// }
 
 pilgrimUtil.pilgrimDontDoNothing = (self) => {
     self.log("Trying to not do nothing");

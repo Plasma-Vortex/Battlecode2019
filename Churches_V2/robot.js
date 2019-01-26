@@ -16,6 +16,14 @@ import preacher from './preacher.js';
 // TODO: replace array.push with array[i] = x to optimize code
 // clique with one resource: 1482125857
 // remove edge (-1, -1): 1482125857
+// one castle many clusters: 216042253
+// weird display: 11548711
+// castle error: 442739537
+// churches on mines: 1160890303
+// good for rush: 1160890303
+// blue pilgrim stuck behind mages: 289962426, pilgrim stuck at top: 592544751
+// pilgrim doesn't move: 1140985075
+
 
 class MyRobot extends BCAbstractRobot {
     constructor() {
