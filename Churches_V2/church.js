@@ -14,14 +14,16 @@ church.takeTurn = (self) => {
     if (self.me.turn === 1) {
         self.unitInfo = new Array(4097);
         for (let i = 0; i <= 4096; i++) {
-            self.unitInfo[i] = { type: -1, info: -1 };
+            self.unitInfo[i] = { type: -1, info: -1, clusterID: -1 };
         }
         util.findSymmetry(self);
-        util.initAvoidMinesMap(self);
+        util.initMaps(self);
         resource.mainInit(self);
         churchUtil.findMyClusterID(self);
         signalling.churchExists(self);
         churchUtil.initMyClusterProgress(self);
+        churchUtil.initDefensePositions(self);
+        churchUtil.initAttackPositions(self);
 
         self.karbBuffer = 30; // TODO: make it dynamic
         self.fuelBuffer = 200; // TODO: make it dynamic
@@ -31,13 +33,17 @@ church.takeTurn = (self) => {
 
     let visibleEnemies = util.findEnemies(self, self.visible);
     visibleEnemies.sort(util.compareDist);
+    self.log("Cluster progress");
+    self.log(self.myClusterProgress);
 
     if (util.hasSpaceAround(self)) {
         if (visibleEnemies.length > 0) { // change to if any cluster is under attack
             self.log("Under attack!");
             // self.log("There is an enemy unit at " + util.pairToString(util.addPair(self.loc, visibleEnemies[0].relPos)));
-            if (util.canBuild(self, SPECS.PREACHER)) {
-                return churchUtil.buildDefenseMage(self, visibleEnemies[0]);
+            if (util.canBuild(self, SPECS.PROPHET)) {
+                let defensePosIndex = churchUtil.getClosestDefensePos(self, visibleEnemies[0].pos, SPECS.PROPHET);
+                self.lastDefensePosIndex = defensePosIndex;
+                return churchUtil.buildDefenseUnit(self, SPECS.PROPHET, self.defensePositions[defensePosIndex]);
             }
         }
         else {
@@ -64,8 +70,12 @@ church.takeTurn = (self) => {
             } // neededDefenseProphets should take turn number (and previous enemy attacks?) into account
             else if (self.myClusterProgress.prophets.length < churchUtil.neededDefenseProphets(self)) {
                 if (churchUtil.canMaintainBuffer(self, SPECS.PROPHET)) {
-                    self.log("Should have built defense prophet");
-                    // return churchUtil.buildDefenseProphet(self);
+                    self.log("Building defense prophet");
+                    let defensePosIndex = churchUtil.getDefensePosIndex(self);
+                    self.log("index = " + defensePosIndex);
+                    self.log(self.defensePositions[defensePosIndex]);
+                    self.lastDefensePosIndex = defensePosIndex;
+                    return churchUtil.buildDefenseUnit(self, SPECS.PROPHET, self.defensePositions[defensePosIndex]);
                 }
                 else {
                     // build up more resources before expanding, to maintain buffer

@@ -24,6 +24,7 @@ import preacher from './preacher.js';
 // blue pilgrim stuck behind mages: 289962426, pilgrim stuck at top: 592544751
 // pilgrim doesn't move: 1140985075
 
+// robot is frozen due to clock overdrawn
 
 class MyRobot extends BCAbstractRobot {
     constructor() {
@@ -49,7 +50,7 @@ class MyRobot extends BCAbstractRobot {
                 this.type = pilgrim;
             else if (this.me.unit === SPECS.CRUSADER)
                 this.type = crusader;
-            else if (this.type === SPECS.PROPHET)
+            else if (this.me.unit === SPECS.PROPHET)
                 this.type = prophet;
             else if (this.me.unit === SPECS.PREACHER)
                 this.type = preacher;

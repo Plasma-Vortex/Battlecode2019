@@ -78,12 +78,12 @@ util.customSort = (a, b) => {
         return a.pos.y - b.pos.y;
 }
 
-util.compareDist = (a, b) => {
-    if (util.norm(a.relPos) !== util.norm(b.relPos))
-        return a.relPos - b.relPos;
-    else
-        return b.unitType - a.unitType;
-}
+// util.compareDist = (a, b) => {
+//     if (util.norm(a.relPos) !== util.norm(b.relPos))
+//         return a.relPos - b.relPos;
+//     else
+//         return b.unitType - a.unitType;
+// }
 
 util.sortByDistToPoint = (pt) => {
     return function (a, b) {
@@ -169,15 +169,29 @@ util.canAttack = (self, pos) => {
         && util.sqDist(pos, self.loc) <= SPECS.UNITS[self.me.unit].ATTACK_RADIUS[1];
 }
 
+util.sortEnemiesByPriority = (self) => {
+    return function(a, b) {
+        if (a.unit > 2 && b.unit <= 2){
+            return -1;
+        }
+        else if (a.unit <= 2 && b.unit > 2){
+            return 1;
+        }
+        else {
+            return util.sqDist(self.loc, a.pos) - util.sqDist(self.loc, b.pos);
+        }
+    }
+}
 
 util.findEnemies = (self, visible) => {
     let enemyUnits = [];
     for (let i = 0; i < visible.length; i++) {
         let r = visible[i];
         if (r.team !== self.me.team) {
-            enemyUnits.push({ unitType: r.unit, relPos: util.subtractPair({ x: r.x, y: r.y }, self.loc) });
+            enemyUnits.push({ unitType: r.unit, pos: { x: r.x, y: r.y } });
         }
     }
+    enemyUnits.sort(util.sortEnemiesByPriority(self));
     return enemyUnits;
 }
 
@@ -242,17 +256,6 @@ util.initMaps = (self) => {
         for (let y = 0; y < self.map.length; y++) {
             self.avoidMinesMap[y][x] = (self.map[y][x] && !self.karbonite_map[y][x] && !self.fuel_map[y][x]);
             self.noMineRobotMap[y][x] = (self.map[y][x] && !self.karbonite_map[y][x] && !self.fuel_map[y][x]);
-        }
-    }
-}
-
-util.updateNoRobotMap = (self) => {
-    let r = Math.ceil(Math.sqrt(SPECS.UNITS[self.me.unit].VISION_RADIUS));
-    for (let x = Math.max(0, self.loc.x - r); x <= Math.min(self.map.length - 1, self.loc.x + r); x++) {
-        for (let y = Math.max(0, self.loc.y - r); y <= Math.min(self.map.length - 1, self.loc.y + r); y++) {
-            if (util.sqDist(self.loc, { x: x, y: y }) <= SPECS.UNITS[self.me.unit].VISION_RADIUS) {
-                self.noMineRobotMap[y][x] = self.avoidMinesMap[y][x] && (self.robotMap[y][x] === 0);
-            }
         }
     }
 }

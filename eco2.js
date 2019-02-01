@@ -1195,14 +1195,7 @@ castleUtil.buildDefenseUnit = (self, unitType, pos) => {
 // TODO: take into account distance to enemy castles / middle
 castleUtil.neededDefenseProphets = (self, clusterIndex) => {
     // return self.clusters[self.myCluster].mines.length;
-    for (let i = 0; i<self.clusterProgress.length; i++) {
-        if (self.clusterProgress.church === 0){
-            return Math.floor(self.me.turn / 50);
-        }
-    }
-    if (self.me.turn > 800)
-        return 1000000;
-    return Math.floor(self.me.turn / 20);
+    return Math.floor(self.me.turn / 10);
 };
 
 castleUtil.buildChurchPilgrim = (self, clusterIndex) => {
@@ -1217,8 +1210,8 @@ castleUtil.buildChurchPilgrim = (self, clusterIndex) => {
 };
 
 castleUtil.canMaintainBuffer = (self, unitType) => {
-    return (self.karbonite - SPECS.UNITS[unitType].CONSTRUCTION_KARBONITE >= castleUtil.getKarbBuffer(self)
-        && self.fuel - SPECS.UNITS[unitType].CONSTRUCTION_FUEL >= castleUtil.getFuelBuffer(self));
+    return (self.karbonite - SPECS.UNITS[unitType].CONSTRUCTION_KARBONITE >= self.karbBuffer + self.churchesInProgress * SPECS.UNITS[SPECS.CHURCH].CONSTRUCTION_KARBONITE
+        && self.fuel - SPECS.UNITS[unitType].CONSTRUCTION_FUEL >= self.fuelBuffer + self.churchesInProgress * SPECS.UNITS[SPECS.CHURCH].CONSTRUCTION_FUEL);
 };
 
 castleUtil.initDefensePositions = (self) => {
@@ -1227,7 +1220,7 @@ castleUtil.initDefensePositions = (self) => {
     for (let x = Math.max(0, self.loc.x - r); x <= Math.min(self.map.length - 1, self.loc.x + r); x++) {
         for (let y = Math.max(0, self.loc.y - r); y <= Math.min(self.map.length - 1, self.loc.y + r); y++) {
             if (util.sqDist(self.loc, { x: x, y: y }) > 2) {
-                if ((x + y) % 2 === (self.loc.x + self.loc.y) % 2 && self.avoidMinesMap[y][x] && !util.pairEq({ x: x, y: y }, self.loc)) {
+                if ((x + y) % 2 === (self.loc.x + self.loc.y) % 2 && self.avoidMinesMap[y][x] && !util.pairEq({x:x, y:y}, self.loc)) {
                     self.defensePositions.push({ x: x, y: y });
                 }
             }
@@ -1273,31 +1266,6 @@ castleUtil.getClosestDefensePos = (self, enemyPos, unitType) => {
             return i;
         }
     }
-};
-
-castleUtil.getFuelBuffer = (self) => {
-    let totalProphets = 0;
-    for (let i = 0; i < self.clusterProgress.length; i++) {
-        totalProphets += self.clusterProgress[i].prophets.length;
-    }
-    let fuelBuffer = 200;
-    fuelBuffer += totalProphets * SPECS.UNITS[SPECS.PROPHET].ATTACK_FUEL_COST * 2; // 2 attacks per prophet
-    fuelBuffer += self.churchesInProgress * SPECS.UNITS[SPECS.CHURCH].CONSTRUCTION_FUEL;
-    return fuelBuffer;
-};
-
-castleUtil.getKarbBuffer = (self) => {
-    let numChurches = 0;
-    for (let i = 0; i<self.clusterProgress.length; i++) {
-        if (self.clusterProgress[i].church == 2){
-            numChurches++;
-        }
-    }
-    numChurches -= self.castles.length;
-    let karbBuffer = 30;
-    karbBuffer += numChurches * 50; // 2 prophets per church
-    karbBuffer += self.churchesInProgress * SPECS.UNITS[SPECS.CHURCH].CONSTRUCTION_KARBONITE;
-    return karbBuffer;
 };
 
 const nav = {};
@@ -1835,6 +1803,9 @@ castle.takeTurn = (self) => {
         // self.crusaders = [];
         // self.prophets = []; // rangers
         // self.preachers = []; // mages/tanks
+
+        self.karbBuffer = 30; // TODO: make it dynamic
+        self.fuelBuffer = 200; // TODO: make it dynamic
     }
 
     castleUtil.updateUnitInfo(self, self.visible); // TODO: add updates to clusterProgress
@@ -1854,7 +1825,7 @@ castle.takeTurn = (self) => {
             if (util.canBuild(self, SPECS.PROPHET)) {
                 let defensePosIndex = castleUtil.getClosestDefensePos(self, visibleEnemies[0].pos, SPECS.PROPHET);
                 self.lastDefensePosIndex = defensePosIndex;
-                return castleUtil.buildDefenseUnit(self, SPECS.PROPHET, self.defensePositions[defensePosIndex]);
+                return churchUtil.buildDefenseUnit(self, SPECS.PROPHET, self.defensePositions[defensePosIndex]);
             }
             else if (util.canAttack(self, visibleEnemies[0].pos)) {
                 self.attack(visibleEnemies[0].pos.x - self.loc.x, visibleEnemies[0].pos.y - self.pos.y);
@@ -1931,9 +1902,9 @@ castle.takeTurn = (self) => {
     }
 };
 
-const churchUtil = {};
+const churchUtil$1 = {};
 
-churchUtil.findMyClusterID = (self) => {
+churchUtil$1.findMyClusterID = (self) => {
     for (let i = 0; i < self.clusters.length; i++) {
         if (util.pairEq(self.clusters[i].churchPos, self.loc)) {
             self.myClusterID = i;
@@ -1941,7 +1912,7 @@ churchUtil.findMyClusterID = (self) => {
     }
 };
 
-churchUtil.initMyClusterProgress = (self) => {
+churchUtil$1.initMyClusterProgress = (self) => {
     self.myClusterProgress = {
         karb: new Array(self.clusters[self.myClusterID].karb.length).fill(-1), // ID of assigned worker
         fuel: new Array(self.clusters[self.myClusterID].fuel.length).fill(-1),
@@ -1952,7 +1923,7 @@ churchUtil.initMyClusterProgress = (self) => {
 };
 
 
-churchUtil.addNewUnits = (self) => {
+churchUtil$1.addNewUnits = (self) => {
     for (let i = 0; i < self.visible.length; i++) {
         let r = self.visible[i];
         if (r.team === self.me.team && self.isRadioing(r) && (r.signal >> 14) === 1) {
@@ -1991,14 +1962,14 @@ churchUtil.addNewUnits = (self) => {
                 let attack = message >> 6;
                 let clusterID = Math.floor((message & ((1 << 6) - 1)) / 3) - 1; // bits 0-5 give cluster and unit type
                 let unitType = (message & ((1 << 6) - 1)) % 3 + 3;
-                self.log("New military unit, attack = " + attack + ", clusterID = " + clusterID + ", unitType = " + unitType);
-                self.unitInfo[r.id].type = unitType;
-                self.unitInfo[r.id].info = attack;
-                self.unitInfo[r.id].clusterID = clusterID;
                 if (clusterID !== self.myClusterID) {
                     self.log("ERROR! New military unit sent existence signal to wrong church");
                     continue;
                 }
+                self.log("New military unit, attack = " + attack + ", clusterID = " + clusterID + ", unitType = " + unitType);
+                self.unitInfo[r.id].type = unitType;
+                self.unitInfo[r.id].info = attack;
+                self.unitInfo[r.id].clusterID = clusterID;
                 if (attack) {
                     if (self.lastAttackPosIndex === -1) {
                         self.log("ERROR! new attack unit for a castle that didn't build it last turn");
@@ -2023,7 +1994,7 @@ churchUtil.addNewUnits = (self) => {
     }
 };
 
-churchUtil.updateUnitInfo = (self) => {
+churchUtil$1.updateUnitInfo = (self) => {
     // check deaths
     let stillAlive = new Array(4097).fill(false);
     for (let i = 0; i < self.visible.length; i++) {
@@ -2055,33 +2026,16 @@ churchUtil.updateUnitInfo = (self) => {
                 self.myClusterProgress.fuelPilgrims--;
             }
         }
-        else if (self.unitInfo[id].type === SPECS.PROPHET) {
-            if (self.unitInfo[id].clusterID === self.myClusterID) {
-                self.myClusterProgress.prophets.splice(self.myClusterProgress.prophets.indexOf(id), 1);
-            }
-            for (let i = 0; i < self.attackProgress.length; i++) {
-                if (self.attackProgress[i].id === id) {
-                    self.attackProgress[i].id = -1;
-                    self.attackProgress[i].type = -1;
-                }
-            }
-            for (let i = 0; i < self.defenseProgress.length; i++) {
-                if (self.defenseProgress[i].id === id) {
-                    self.defenseProgress[i].id = -1;
-                    self.defenseProgress[i].type = -1;
-                }
-            }
-        }
         // TODO: add for other unit types
         self.unitInfo[id] = { type: -1, info: -1, clusterID: -1 };
     }
 
     // check new units
-    churchUtil.addNewUnits(self);
+    churchUtil$1.addNewUnits(self);
 };
 
 // TODO: fix case when pilgrim killed while id unknown (0). Do this in update by checking new visible units
-churchUtil.buildKarbPilgrim = (self) => {
+churchUtil$1.buildKarbPilgrim = (self) => {
     for (let i = 0; i < self.myClusterProgress.karb.length; i++) {
         if (self.myClusterProgress.karb[i] === -1) {
             // found first needed karb pilgrim
@@ -2100,7 +2054,7 @@ churchUtil.buildKarbPilgrim = (self) => {
 };
 
 // TODO: fix case when pilgrim killed while id unknown (0). Do this in update by checking new visible units
-churchUtil.buildFuelPilgrim = (self) => {
+churchUtil$1.buildFuelPilgrim = (self) => {
     for (let i = 0; i < self.myClusterProgress.fuel.length; i++) {
         if (self.myClusterProgress.fuel[i] === -1) {
             // found first needed fuel pilgrim
@@ -2131,7 +2085,7 @@ churchUtil.buildFuelPilgrim = (self) => {
 //     return self.buildUnit(SPECS.PREACHER, shift.x, shift.y);
 // }
 
-churchUtil.buildDefenseUnit = (self, unitType, pos) => {
+churchUtil$1.buildDefenseUnit = (self, unitType, pos) => {
     self.log("Building defense unit of type " + unitType + " at " + util.pairToString(pos));
     let shift = util.closestAdjacent(self, pos);
     if (util.pairEq(shift, { x: -100, y: -100 })) {
@@ -2142,16 +2096,16 @@ churchUtil.buildDefenseUnit = (self, unitType, pos) => {
     return self.buildUnit(unitType, shift.x, shift.y);
 };
 
-churchUtil.neededDefenseProphets = (self) => {
-    return Math.floor(self.me.turn / 15);
+churchUtil$1.neededDefenseProphets = (self) => {
+    return Math.floor(self.me.turn / 10);
 };
 
-churchUtil.canMaintainBuffer = (self, unitType) => {
+churchUtil$1.canMaintainBuffer = (self, unitType) => {
     return (self.karbonite - SPECS.UNITS[unitType].CONSTRUCTION_KARBONITE >= self.karbBuffer
         && self.fuel - SPECS.UNITS[unitType].CONSTRUCTION_FUEL >= self.fuelBuffer);
 };
 
-churchUtil.initDefensePositions = (self) => {
+churchUtil$1.initDefensePositions = (self) => {
     self.defensePositions = [];
     let r = 15;
     for (let x = Math.max(0, self.loc.x - r); x <= Math.min(self.map.length - 1, self.loc.x + r); x++) {
@@ -2170,7 +2124,7 @@ churchUtil.initDefensePositions = (self) => {
     }
 };
 
-churchUtil.initAttackPositions = (self) => {
+churchUtil$1.initAttackPositions = (self) => {
     self.attackPositions = [];
     let r = 15;
     for (let x = Math.max(0, self.loc.x - r); x <= Math.min(self.map.length - 1, self.loc.x + r); x++) {
@@ -2189,7 +2143,7 @@ churchUtil.initAttackPositions = (self) => {
     }
 };
 
-churchUtil.getDefensePosIndex = (self) => {
+churchUtil$1.getDefensePosIndex = (self) => {
     for (let i = 0; i < self.defenseProgress.length; i++) {
         if (self.defenseProgress[i].type === -1) {
             return i;
@@ -2197,7 +2151,7 @@ churchUtil.getDefensePosIndex = (self) => {
     }
 };
 
-churchUtil.getClosestDefensePos = (self, enemyPos, unitType) => {
+churchUtil$1.getClosestDefensePos = (self, enemyPos, unitType) => {
     for (let i = 0; i < self.defensePositions.length; i++) {
         if (self.defenseProgress[i].type === -1 && util.sqDist(self.defensePositions[i], enemyPos) <= SPECS.UNITS[unitType].ATTACK_RADIUS[1]) {
             return i;
@@ -2220,17 +2174,17 @@ church.takeTurn = (self) => {
         util.findSymmetry(self);
         util.initMaps(self);
         resource.mainInit(self);
-        churchUtil.findMyClusterID(self);
+        churchUtil$1.findMyClusterID(self);
         signalling.churchExists(self);
-        churchUtil.initMyClusterProgress(self);
-        churchUtil.initDefensePositions(self);
-        churchUtil.initAttackPositions(self);
+        churchUtil$1.initMyClusterProgress(self);
+        churchUtil$1.initDefensePositions(self);
+        churchUtil$1.initAttackPositions(self);
 
         self.karbBuffer = 30; // TODO: make it dynamic
         self.fuelBuffer = 200; // TODO: make it dynamic
     }
 
-    churchUtil.updateUnitInfo(self, self.visible);
+    churchUtil$1.updateUnitInfo(self, self.visible);
 
     let visibleEnemies = util.findEnemies(self, self.visible);
     visibleEnemies.sort(util.compareDist);
@@ -2242,16 +2196,16 @@ church.takeTurn = (self) => {
             self.log("Under attack!");
             // self.log("There is an enemy unit at " + util.pairToString(util.addPair(self.loc, visibleEnemies[0].relPos)));
             if (util.canBuild(self, SPECS.PROPHET)) {
-                let defensePosIndex = churchUtil.getClosestDefensePos(self, visibleEnemies[0].pos, SPECS.PROPHET);
+                let defensePosIndex = churchUtil$1.getClosestDefensePos(self, visibleEnemies[0].pos, SPECS.PROPHET);
                 self.lastDefensePosIndex = defensePosIndex;
-                return churchUtil.buildDefenseUnit(self, SPECS.PROPHET, self.defensePositions[defensePosIndex]);
+                return churchUtil$1.buildDefenseUnit(self, SPECS.PROPHET, self.defensePositions[defensePosIndex]);
             }
         }
         else {
             if (self.myClusterProgress.karbPilgrims < self.clusters[self.myClusterID].karb.length) {
                 // build more karb pilgrims
-                if (churchUtil.canMaintainBuffer(self, SPECS.PILGRIM)) {
-                    return churchUtil.buildKarbPilgrim(self); // add way to properly choose mine for pilgrim
+                if (churchUtil$1.canMaintainBuffer(self, SPECS.PILGRIM)) {
+                    return churchUtil$1.buildKarbPilgrim(self); // add way to properly choose mine for pilgrim
                 }
                 else {
                     // build up more resources before expanding, to maintain buffer
@@ -2260,8 +2214,8 @@ church.takeTurn = (self) => {
                 }
             }
             else if (self.myClusterProgress.fuelPilgrims < self.clusters[self.myClusterID].fuel.length) {
-                if (churchUtil.canMaintainBuffer(self, SPECS.PILGRIM)) {
-                    return churchUtil.buildFuelPilgrim(self);
+                if (churchUtil$1.canMaintainBuffer(self, SPECS.PILGRIM)) {
+                    return churchUtil$1.buildFuelPilgrim(self);
                 }
                 else {
                     // build up more resources before expanding, to maintain buffer
@@ -2269,14 +2223,14 @@ church.takeTurn = (self) => {
                     return;
                 }
             } // neededDefenseProphets should take turn number (and previous enemy attacks?) into account
-            else if (self.myClusterProgress.prophets.length < churchUtil.neededDefenseProphets(self)) {
-                if (churchUtil.canMaintainBuffer(self, SPECS.PROPHET)) {
+            else if (self.myClusterProgress.prophets.length < churchUtil$1.neededDefenseProphets(self)) {
+                if (churchUtil$1.canMaintainBuffer(self, SPECS.PROPHET)) {
                     self.log("Building defense prophet");
-                    let defensePosIndex = churchUtil.getDefensePosIndex(self);
+                    let defensePosIndex = churchUtil$1.getDefensePosIndex(self);
                     self.log("index = " + defensePosIndex);
                     self.log(self.defensePositions[defensePosIndex]);
                     self.lastDefensePosIndex = defensePosIndex;
-                    return churchUtil.buildDefenseUnit(self, SPECS.PROPHET, self.defensePositions[defensePosIndex]);
+                    return churchUtil$1.buildDefenseUnit(self, SPECS.PROPHET, self.defensePositions[defensePosIndex]);
                 }
                 else {
                     // build up more resources before expanding, to maintain buffer
@@ -3081,7 +3035,6 @@ preacher.takeTurn = (self) => {
 // blue pilgrim stuck behind mages: 289962426, pilgrim stuck at top: 592544751
 // pilgrim doesn't move: 1140985075
 
-// robot is frozen due to clock overdrawn
 
 class MyRobot extends BCAbstractRobot {
     constructor() {

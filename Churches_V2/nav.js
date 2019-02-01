@@ -82,24 +82,35 @@ nav.fullBFS = (start, map, speed, beside = false) => {
     return dist;
 }
 
-nav.move = (loc, bfsGrid, map, robots, speed, forceMove = false) => {
+nav.move = (loc, destination, bfsGrid, map, robots, speed, forceMove = false) => {
+    let minTime = 1000000;
     let minDist = 1000000;
-    let minCost = 1000000;
-    let bestMove = { x: -100, y: -100 };
+    let bestMove = { x: 0, y: 0 };
     for (let dx = -3; dx <= 3; dx++) {
         for (let dy = -3; dy <= 3; dy++) {
             let next = { x: loc.x + dx, y: loc.y + dy };
             if (util.sqDist(loc, next) <= speed && (util.empty(next, map, robots) || (dx === 0 && dy === 0 && !forceMove))) {
                 // prioritize fast over cost
-                if (bfsGrid[next.y][next.x] < minDist || (bfsGrid[next.y][next.x] === minDist && util.sqDist(loc, next) < minCost)) {
-                    minDist = bfsGrid[next.y][next.x];
-                    minCost = util.sqDist(loc, next);
+                if (bfsGrid[next.y][next.x] < minTime || (bfsGrid[next.y][next.x] === minTime && util.sqDist(next, destination) < minDist)) {
+                    minTime = bfsGrid[next.y][next.x];
+                    minDist = util.sqDist(next, destination);
                     bestMove = { x: dx, y: dy };
                 }
             }
         }
     }
     return bestMove;
+}
+
+nav.updateNoRobotMap = (self) => {
+    let r = Math.ceil(Math.sqrt(SPECS.UNITS[self.me.unit].VISION_RADIUS));
+    for (let x = Math.max(0, self.loc.x - r); x <= Math.min(self.map.length - 1, self.loc.x + r); x++) {
+        for (let y = Math.max(0, self.loc.y - r); y <= Math.min(self.map.length - 1, self.loc.y + r); y++) {
+            if (util.sqDist(self.loc, { x: x, y: y }) <= SPECS.UNITS[self.me.unit].VISION_RADIUS) {
+                self.noMineRobotMap[y][x] = self.avoidMinesMap[y][x] && (self.robotMap[y][x] === 0);
+            }
+        }
+    }
 }
 
 export default nav;

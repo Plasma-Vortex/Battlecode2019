@@ -219,45 +219,35 @@ resource.assignClusterIDs = (self) => {
     }
 }
 
+// for castles, this happens before clusters is sorted
+resource.getClusterID = (self, pos) => {
+    let minDist = 1000000;
+    let closest = -1;
+    for (let j = 0; j < self.allResources.length; j++) {
+        if (util.sqDist(pos, self.allResources[j].pos) < minDist) {
+            minDist = util.sqDist(pos, self.allResources[j].pos);
+            closest = j;
+        }
+    }
+    for (let j = 0; j < self.clusters.length; j++) {
+        if (self.clusters[j].mines.includes(closest)) {
+            return j;
+        }
+    }
+}
+
 // TODO: set church = 2 or church = -1
 // for castles only
 resource.findCastleClusters = (self) => {
     for (let i = 0; i < self.castlePos.length; i++) {
-        let minDist = 1000000;
-        let closest = -1;
-        for (let j = 0; j < self.allResources.length; j++) {
-            if (util.sqDist(self.castlePos[i], self.allResources[j].pos) < minDist) {
-                minDist = util.sqDist(self.castlePos[i], self.allResources[j].pos);
-                closest = j;
-            }
-        }
-        // Consider specifying which castle?
-        // Should add enemy castles too, attack those last
-        for (let j = 0; j < self.clusters.length; j++) {
-            if (self.clusters[j].mines.includes(closest)) {
-                self.clusters[j].castle = i + 1;
-                // self.clusters[j].churchPos = util.copyPair(self.castlePos[i]);
-            }
-        }
+        let clusterID = resource.getClusterID(self, self.castlePos[i]);
+        self.clusters[clusterID].castle = i + 1;
+        self.unitInfo[self.castles[i]].clusterID = clusterID;
     }
     // enemy castles
     for (let i = 0; i < self.enemyCastlePos.length; i++) {
-        let minDist = 1000000;
-        let closest = -1;
-        for (let j = 0; j < self.allResources.length; j++) {
-            if (util.sqDist(self.enemyCastlePos[i], self.allResources[j].pos) < minDist) {
-                minDist = util.sqDist(self.enemyCastlePos[i], self.allResources[j].pos);
-                closest = j;
-            }
-        }
-        // Consider specifying which castle?
-        // Should add enemy castles too, attack those last
-        for (let j = 0; j < self.clusters.length; j++) {
-            if (self.clusters[j].mines.includes(closest)) {
-                self.clusters[j].castle = -(i + 1);
-                // self.clusters[j].churchPos = util.copyPair(self.castlePos[i]);
-            }
-        }
+        let clusterID = resource.getClusterID(self, self.enemyCastlePos[i]);
+        self.clusters[clusterID].castle = -(i + 1);
     }
 }
 

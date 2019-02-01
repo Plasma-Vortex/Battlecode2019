@@ -14,7 +14,7 @@ castle.takeTurn = (self) => {
     if (self.me.turn === 1) {
         self.unitInfo = new Array(4097);
         for (let i = 0; i <= 4096; i++) {
-            self.unitInfo[i] = { type: -1, info: -1 };
+            self.unitInfo[i] = { type: -1, info: -1, clusterID: -1 };
         }
 
         self.castles = [];
@@ -101,7 +101,7 @@ castle.takeTurn = (self) => {
             self.enemyCastlePos.push(util.reflect(self, self.castlePos[i]));
         }
 
-        util.initAvoidMinesMap(self);
+        util.initMaps(self);
         resource.mainInit(self);
         for (let i = 0; i < self.clusters.length; i++) {
             if (self.clusters[i].castle === self.castleNumber + 1) {
@@ -111,6 +111,9 @@ castle.takeTurn = (self) => {
         castleUtil.initClusterProgress(self);
         castleUtil.initDefensePositions(self);
         castleUtil.initAttackPositions(self);
+        self.log("Defense positions:");
+        self.log(self.defensePositions);
+        
 
         // self.castles already exists
         // self.churches = [];
@@ -118,16 +121,12 @@ castle.takeTurn = (self) => {
         // self.crusaders = [];
         // self.prophets = []; // rangers
         // self.preachers = []; // mages/tanks
-
-        self.karbBuffer = 30; // TODO: make it dynamic
-        self.fuelBuffer = 200; // TODO: make it dynamic
     }
 
     castleUtil.updateUnitInfo(self, self.visible); // TODO: add updates to clusterProgress
     castleUtil.updateChurchesInProgress(self);
 
     let visibleEnemies = util.findEnemies(self, self.visible);
-    visibleEnemies.sort(util.compareDist);
     let targetCluster = castleUtil.getTargetCluster(self);
 
     self.log("Cluster Progress:");
@@ -138,11 +137,13 @@ castle.takeTurn = (self) => {
     if (util.hasSpaceAround(self)) {
         if (visibleEnemies.length > 0) { // change to if any cluster is under attack
             self.log("Under attack!");
-            if (util.canBuild(self, SPECS.PREACHER)) {
-                return castleUtil.buildDefenseMage(self, visibleEnemies[0]);
+            if (util.canBuild(self, SPECS.PROPHET)) {
+                let defensePosIndex = castleUtil.getClosestDefensePos(self, visibleEnemies[0].pos, SPECS.PROPHET);
+                self.lastDefensePosIndex = defensePosIndex;
+                return castleUtil.buildDefenseUnit(self, SPECS.PROPHET, self.defensePositions[defensePosIndex]);
             }
-            else if (util.canAttack(self, util.addPair(self.loc, visibleEnemies[0].relPos))) {
-                self.attack(visibleEnemies[0].relPos.x, visibleEnemies[0].relPos.y);
+            else if (util.canAttack(self, visibleEnemies[0].pos)) {
+                self.attack(visibleEnemies[0].pos.x - self.loc.x, visibleEnemies[0].pos.y - self.pos.y);
             }
         }
         else if (targetCluster === self.myCluster) {
@@ -169,18 +170,21 @@ castle.takeTurn = (self) => {
             } // neededDefenseProphets should take turn number (and previous enemy attacks?) into account
             else if (self.clusterProgress[self.myCluster].prophets.length < castleUtil.neededDefenseProphets(self)) {
                 if (castleUtil.canMaintainBuffer(self, SPECS.PROPHET)) {
-                    self.log("Should have built defense prophet");
-                    // return castleUtil.buildDefenseProphet(self);
+                    self.log("Building defense prophet");
+                    let defensePosIndex = castleUtil.getDefensePosIndex(self);
+                    self.log("index = "+defensePosIndex);
+                    self.log(self.defensePositions[defensePosIndex]);
+                    self.lastDefensePosIndex = defensePosIndex;
+                    return castleUtil.buildDefenseUnit(self, SPECS.PROPHET, self.defensePositions[defensePosIndex]);
                 }
                 else {
                     // build up more resources before expanding, to maintain buffer
-                    self.log("Saving for defense mage");
+                    self.log("Saving for defense prophet");
                     return;
                 }
             }
             else {
                 self.log("ERROR! my cluster already has all karb pilgrims, fuel pilgrims, and prophets needed");
-                self.clusterProgress[self.myCluster].done = true;
                 return;
             }
         }

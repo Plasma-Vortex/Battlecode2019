@@ -14,7 +14,7 @@ pilgrim.takeTurn = (self) => {
     self.log("I have " + self.me.karbonite + " karb and " + self.me.fuel + " fuel");
 
     if (self.me.turn === 1) {
-        util.initAvoidMinesMap(self);
+        util.initMaps(self);
         resource.mainInit(self);
         self.log("self.clusters:");
         for (let i = 0; i < self.clusters.length; i++)
@@ -23,6 +23,7 @@ pilgrim.takeTurn = (self) => {
         self.foundChurches = [];
         self.foundEnemyCastles = [];
         self.foundEnemyChurches = [];
+        self.lastStuck = false;
         self.usingNoRobotMap = false;
     }
 
@@ -48,7 +49,7 @@ pilgrim.takeTurn = (self) => {
                     self.myClusterID = self.allResources[message].cluster;
                     self.base = { x: r.x, y: r.y };
                     self.state = "going to mine";
-                    if (r.unit === SPECS.CHURCH){
+                    if (r.unit === SPECS.CHURCH) {
                         signalling.newPilgrimExists(self, self.targetMineID, 10);
                     }
                 }
@@ -78,41 +79,75 @@ pilgrim.takeTurn = (self) => {
         }
     }
 
-    // util.updateNoRobotMap(self);
+    nav.updateNoRobotMap(self);
 
     if (self.state === "going to build church") {
         // TODO: add check to see if desired church is already built
         self.log("Pilgrim state: " + self.state);
         if (util.sqDist(self.loc, self.base) <= 2) {
             self.state = "building church";
+            self.usingNoRobotMap = false;
             self.log("Already arrived at build location, state switching to " + self.state);
         }
         else {
-            let chosenMove = nav.move(self.loc, self.bfsFromBase, self.map, self.robotMap, SPECS.UNITS[self.me.unit].SPEED);
+            let chosenMove = -1;
+            if (self.usingNoRobotMap) {
+                chosenMove = nav.move(self.loc, self.base, self.bfsFromBaseNoRobot, self.noMineRobotMap, self.robotMap, SPECS.UNITS[self.me.unit].SPEED);
+            }
+            else {
+                chosenMove = nav.move(self.loc, self.base, self.bfsFromBase, self.map, self.robotMap, SPECS.UNITS[self.me.unit].SPEED);
+            }
             self.log("Move: " + util.pairToString(chosenMove));
             if (util.pairEq(chosenMove, { x: 0, y: 0 })) {
-                self.log("New move: " + util.pairToString(chosenMove));
-                if (util.pairEq(chosenMove, { x: 0, y: 0 })) {
-                    // TODO: pilgrim is stuck, turn stationary robots into impassable
-                    return pilgrimUtil.pilgrimDontDoNothing(self);
+                if (self.lastStuck){
+                    self.log("Switching to no robot map");
+                    self.usingNoRobotMap = true;
+                    self.bfsFromBaseNoRobot = nav.fullBFS(self.base, self.noMineRobotMap, SPECS.UNITS[self.me.unit].SPEED, true);
+                    chosenMove = nav.move(self.loc, self.base, self.bfsFromBaseNoRobot, self.noMineRobotMap, self.robotMap, SPECS.UNITS[self.me.unit].SPEED);
+
+                    self.log("New move: " + util.pairToString(chosenMove));
+                    if (util.pairEq(chosenMove, { x: 0, y: 0 })) {
+                        self.log("Still stuck, even with no robot map");
+                        return pilgrimUtil.pilgrimDontDoNothing(self);
+                    }
+                    else {
+                        self.lastStuck = false;
+                    }
                 }
+                else {
+                    self.lastStuck = true;
+                    if (self.usingNoRobotMap) {
+                        chosenMove = nav.move(self.loc, self.base, self.bfsFromBaseNoRobot, self.noMineRobotMap, self.robotMap, SPECS.UNITS[self.me.unit].SPEED, true);
+                    }
+                    else {
+                        chosenMove = nav.move(self.loc, self.base, self.bfsFromBase, self.map, self.robotMap, SPECS.UNITS[self.me.unit].SPEED, true);
+                    }
+                    self.log("I'm stuck, random move: " + util.pairToString(chosenMove));
+                    if (util.pairEq(chosenMove, { x: 0, y: 0 })) {
+                        self.log("Completely stuck");
+                        return pilgrimUtil.pilgrimDontDoNothing(self);
+                    }
+                }
+            }
+            else {
+                self.lastStuck = false;
             }
             if (util.sqDist(util.addPair(self.loc, chosenMove), self.base) <= 2 && util.enoughFuelToMove(self, chosenMove)) {
                 self.state = "building church";
+                self.usingNoRobotMap = false;
                 self.log("Will arrive at build location next turn, state switching to " + self.state);
             }
             return self.move(chosenMove.x, chosenMove.y);
         }
     }
 
-    if (self.state === "building church") { // combine with above state?
+    if (self.state === "building church") {
         if (util.sqDist(self.loc, self.base) > 2) {
             self.log("ERROR! state is " + self.state + " but not currently adjacent to build location");
             self.state = "going to mine";
-            // TODO: set mine as closest karb
         }
         else {
-            if (util.empty(self.base, self.map, self.robotMap) && util.canBuild(self, SPECS.CHURCH)){
+            if (util.empty(self.base, self.map, self.robotMap) && util.canBuild(self, SPECS.CHURCH)) {
                 self.log("Building church at " + util.pairToString(self.base));
                 let shift = util.subtractPair(self.base, self.loc);
                 self.castleTalk((1 << 7) + self.targetMineID);
@@ -131,23 +166,57 @@ pilgrim.takeTurn = (self) => {
         self.log("Pilgrim state: " + self.state);
         if (util.pairEq(self.loc, self.targetMinePos)) {
             self.state = "mining"; // can start mining on the same turn
+            self.usingNoRobotMap = false;
             self.log("Already arrived at mine, state changed to " + self.state);
         }
         else {
-            let chosenMove = nav.move(self.loc, self.bfsFromMine, self.map, self.robotMap, SPECS.UNITS[self.me.unit].SPEED);
+            let chosenMove = -1;
+            if (self.usingNoRobotMap) {
+                chosenMove = nav.move(self.loc, self.mine, self.bfsFromMineNoRobot, self.noMineRobotMap, self.robotMap, SPECS.UNITS[self.me.unit].SPEED);
+            }
+            else {
+                chosenMove = nav.move(self.loc, self.mine, self.bfsFromMine, self.map, self.robotMap, SPECS.UNITS[self.me.unit].SPEED);
+            }
             self.log("Move: " + util.pairToString(chosenMove));
             if (util.pairEq(chosenMove, { x: 0, y: 0 })) {
-                // TODO: alternate move
-                self.log("New move: " + util.pairToString(chosenMove));
-                if (util.pairEq(chosenMove, { x: 0, y: 0 })) {
-                    // TODO: signal when stuck
-                    return pilgrimUtil.pilgrimDontDoNothing(self);
+                if (self.lastStuck){
+                    self.log("Switching to no robot map");
+                    self.usingNoRobotMap = true;
+                    self.bfsFromMineNoRobot = nav.fullBFS(self.mine, self.noMineRobotMap, SPECS.UNITS[self.me.unit].SPEED);
+                    chosenMove = nav.move(self.loc, self.mine, self.bfsFromMineNoRobot, self.noMineRobotMap, self.robotMap, SPECS.UNITS[self.me.unit].SPEED);
+
+                    self.log("New move: " + util.pairToString(chosenMove));
+                    if (util.pairEq(chosenMove, { x: 0, y: 0 })) {
+                        self.log("Still stuck, even with no robot map");
+                        return pilgrimUtil.pilgrimDontDoNothing(self);
+                    }
+                    else {
+                        self.lastStuck = false;
+                    }
+                }
+                else {
+                    self.lastStuck = true;
+                    if (self.usingNoRobotMap) {
+                        chosenMove = nav.move(self.loc, self.mine, self.bfsFromMineNoRobot, self.noMineRobotMap, self.robotMap, SPECS.UNITS[self.me.unit].SPEED, true);
+                    }
+                    else {
+                        chosenMove = nav.move(self.loc, self.mine, self.bfsFromMine, self.map, self.robotMap, SPECS.UNITS[self.me.unit].SPEED, true);
+                    }
+                    self.log("I'm stuck, random move: " + util.pairToString(chosenMove));
+                    if (util.pairEq(chosenMove, { x: 0, y: 0 })) {
+                        self.log("Completely stuck");
+                        return pilgrimUtil.pilgrimDontDoNothing(self);
+                    }
                 }
             }
+            else {
+                self.lastStuck = false;
+            }
             // TODO: make pilgrims follow fuel buffer
-            if (util.pairEq(util.addPair(self.loc, chosenMove), self.targetMinePos)
-                && util.enoughFuelToMove(self, chosenMove))
+            if (util.pairEq(util.addPair(self.loc, chosenMove), self.targetMinePos) && util.enoughFuelToMove(self, chosenMove)) {
                 self.state = "mining";
+                self.usingNoRobotMap = false;
+            }
             return self.move(chosenMove.x, chosenMove.y);
         }
     }
@@ -177,40 +246,58 @@ pilgrim.takeTurn = (self) => {
     }
 
     if (self.state === "going to base") {
-        // if (!self.baseInitialized) {
-        //     let minDist = 1000000;
-        //     for (let i = 0; i < self.foundCastles.length; i++) {
-        //         if (util.sqDist(self.foundCastles[i], self.targetMinePos) < minDist) {
-        //             minDist = util.sqDist(self.foundCastles[i], self.targetMinePos);
-        //             self.base = self.foundCastles[i];
-        //         }
-        //     }
-        //     for (let i = 0; i < self.foundChurches.length; i++) {
-        //         if (util.sqDist(self.foundChurches[i], self.targetMinePos) < minDist) {
-        //             minDist = util.sqDist(self.foundChurches[i], self.targetMinePos);
-        //             self.base = self.foundChurches[i];
-        //         }
-        //     }
-        //     self.baseInitialized = true;
-        // }
         self.log("Pilgrim state: " + self.state);
         if (util.sqDist(self.loc, self.base) <= 2) {
             self.state = "depositing";
+            self.usingNoRobotMap = false;
             self.log("Already arrived at base, state switching to " + self.state);
         }
         else {
-            let chosenMove = nav.move(self.loc, self.bfsFromBase, self.map, self.robotMap, SPECS.UNITS[self.me.unit].SPEED);
+            let chosenMove = -1;
+            if (self.usingNoRobotMap) {
+                chosenMove = nav.move(self.loc, self.base, self.bfsFromBaseNoRobot, self.noMineRobotMap, self.robotMap, SPECS.UNITS[self.me.unit].SPEED);
+            }
+            else {
+                chosenMove = nav.move(self.loc, self.base, self.bfsFromBase, self.map, self.robotMap, SPECS.UNITS[self.me.unit].SPEED);
+            }
             self.log("Move: " + util.pairToString(chosenMove));
             if (util.pairEq(chosenMove, { x: 0, y: 0 })) {
-                // TODO: alternate move
-                self.log("New move: " + util.pairToString(chosenMove));
-                if (util.pairEq(chosenMove, { x: 0, y: 0 })) {
-                    // TODO: handle stuck pilgrims
-                    return pilgrimUtil.pilgrimDontDoNothing(self);
+                if (self.lastStuck){
+                    self.log("Switching to no robot map");
+                    self.usingNoRobotMap = true;
+                    self.bfsFromBaseNoRobot = nav.fullBFS(self.base, self.noMineRobotMap, SPECS.UNITS[self.me.unit].SPEED, true);
+                    chosenMove = nav.move(self.loc, self.base, self.bfsFromBaseNoRobot, self.noMineRobotMap, self.robotMap, SPECS.UNITS[self.me.unit].SPEED);
+
+                    self.log("New move: " + util.pairToString(chosenMove));
+                    if (util.pairEq(chosenMove, { x: 0, y: 0 })) {
+                        self.log("Still stuck, even with no robot map");
+                        return pilgrimUtil.pilgrimDontDoNothing(self);
+                    }
+                    else {
+                        self.lastStuck = false;
+                    }
                 }
+                else {
+                    self.lastStuck = true;
+                    if (self.usingNoRobotMap) {
+                        chosenMove = nav.move(self.loc, self.base, self.bfsFromBaseNoRobot, self.noMineRobotMap, self.robotMap, SPECS.UNITS[self.me.unit].SPEED, true);
+                    }
+                    else {
+                        chosenMove = nav.move(self.loc, self.base, self.bfsFromBase, self.map, self.robotMap, SPECS.UNITS[self.me.unit].SPEED, true);
+                    }
+                    self.log("I'm stuck, random move: " + util.pairToString(chosenMove));
+                    if (util.pairEq(chosenMove, { x: 0, y: 0 })) {
+                        self.log("Completely stuck");
+                        return pilgrimUtil.pilgrimDontDoNothing(self);
+                    }
+                }
+            }
+            else {
+                self.lastStuck = false;
             }
             if (util.sqDist(util.addPair(self.loc, chosenMove), self.base) <= 2 && util.enoughFuelToMove(self, chosenMove)) {
                 self.state = "depositing";
+                self.usingNoRobotMap = false;
                 self.log("Will arrive at base next turn, state switching to " + self.state);
             }
             return self.move(chosenMove.x, chosenMove.y);
